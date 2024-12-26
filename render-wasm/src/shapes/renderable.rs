@@ -6,7 +6,12 @@ use crate::math::Rect;
 use crate::render::{ImageStore, Renderable};
 
 impl Renderable for Shape {
-    fn render(&self, surface: &mut skia_safe::Surface, images: &ImageStore) -> Result<(), String> {
+    fn render(
+        &self,
+        surface: &mut skia_safe::Surface,
+        images: &ImageStore,
+        font_provider: &skia::textlayout::TypefaceFontProvider,
+    ) -> Result<(), String> {
         let transform = self.transform.to_skia_matrix();
 
         // Check transform-matrix code from common/src/app/common/geom/shapes/transforms.cljc
