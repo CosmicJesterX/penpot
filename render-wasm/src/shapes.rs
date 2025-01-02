@@ -3,7 +3,7 @@ use skia_safe as skia;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use crate::render::{BlendMode, Renderable};
+use crate::render::BlendMode;
 
 mod blurs;
 mod bools;
@@ -11,7 +11,6 @@ mod fills;
 mod images;
 mod matrix;
 mod paths;
-mod renderable;
 mod strokes;
 mod svgraw;
 
@@ -41,20 +40,21 @@ pub type Color = skia::Color;
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct Shape {
-    id: Uuid,
-    children: Vec<Uuid>,
-    kind: Kind,
-    selrect: math::Rect,
-    transform: Matrix,
-    rotation: f32,
-    clip_content: bool,
-    fills: Vec<Fill>,
-    strokes: Vec<Stroke>,
-    blend_mode: BlendMode,
-    blur: Blur,
-    opacity: f32,
-    hidden: bool,
-    svg_attrs: HashMap<String, String>,
+    pub id: Uuid,
+    pub children: Vec<Uuid>,
+    pub kind: Kind,
+    pub selrect: math::Rect,
+    pub transform: Matrix,
+    pub rotation: f32,
+    pub clip_content: bool,
+    pub fills: Vec<Fill>,
+    pub strokes: Vec<Stroke>,
+    pub blend_mode: BlendMode,
+    pub blur: Blur,
+    pub opacity: f32,
+    pub hidden: bool,
+    pub svg: Option<skia::svg::Dom>,
+    pub svg_attrs: HashMap<String, String>,
 }
 
 impl Shape {
@@ -73,6 +73,7 @@ impl Shape {
             opacity: 1.,
             hidden: false,
             blur: Blur::default(),
+            svg: None,
             svg_attrs: HashMap::new(),
         }
     }
@@ -250,11 +251,43 @@ impl Shape {
         self.kind = Kind::Rect(self.selrect, corners);
     }
 
+    pub fn set_svg(&mut self, svg: skia::svg::Dom) {
+        self.svg = Some(svg);
+    }
+
     pub fn set_svg_attr(&mut self, name: String, value: String) {
         self.svg_attrs.insert(name, value);
     }
 
-    fn to_path_transform(&self) -> Option<skia::Matrix> {
+    pub fn blend_mode(&self) -> crate::render::BlendMode {
+        self.blend_mode
+    }
+
+    pub fn opacity(&self) -> f32 {
+        self.opacity
+    }
+
+    pub fn hidden(&self) -> bool {
+        self.hidden
+    }
+
+    pub fn bounds(&self) -> math::Rect {
+        self.selrect
+    }
+
+    pub fn clip(&self) -> bool {
+        self.clip_content
+    }
+
+    pub fn children_ids(&self) -> Vec<Uuid> {
+        self.children.clone()
+    }
+
+    pub fn is_recursive(&self) -> bool {
+        !matches!(self.kind, Kind::SVGRaw(_))
+    }
+
+    pub fn to_path_transform(&self) -> Option<skia::Matrix> {
         match self.kind {
             Kind::Path(_) | Kind::Bool(_, _) => {
                 let center = self.bounds().center();
