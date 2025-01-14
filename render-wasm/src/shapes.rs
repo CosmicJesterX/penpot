@@ -208,7 +208,7 @@ impl Shape {
             Kind::Path(_) => {
                 self.set_svg_attr(name, value);
             }
-            Kind::Rect(_) | Kind::Circle(_) | Kind::SVGRaw(_) => todo!(),
+            Kind::Rect(_, _) | Kind::Circle(_) | Kind::SVGRaw(_) | Kind::Bool(_, _) => todo!(),
         };
     }
 
@@ -281,6 +281,22 @@ impl Shape {
 
     pub fn children_ids(&self) -> Vec<Uuid> {
         self.children.clone()
+    }
+
+    pub fn image_filter(&self, scale: f32) -> Option<skia::ImageFilter> {
+        if !self.blur.hidden {
+            match self.blur.blur_type {
+                BlurType::None => None,
+                BlurType::Layer => skia::image_filters::blur(
+                    (self.blur.value * scale, self.blur.value * scale),
+                    None,
+                    None,
+                    None,
+                ),
+            }
+        } else {
+            None
+        }
     }
 
     pub fn is_recursive(&self) -> bool {
