@@ -26,7 +26,6 @@
    [app.util.pointer-map :as pmap]
    [app.util.time :as dt]
    [app.worker :as wrk]
-   [clojure.set :as set]
    [integrant.core :as ig]))
 
 (declare ^:private get-file)
@@ -156,51 +155,53 @@
       AND f.deleted_at IS null
     ORDER BY f.modified_at ASC")
 
+(defn- get-used-components
+  "Given a file and a set of components marked for deletion, return a
+  filtered set of component ids that are still un use"
+  [components library-id {:keys [data]}]
+  (filter #(ctf/used-in? data library-id % :component) components))
+
 (defn- clean-deleted-components!
   "Performs the garbage collection of unreferenced deleted components."
   [{:keys [::db/conn] :as cfg} {:keys [data] :as file}]
   (let [file-id (:id file)
 
-        get-used-components
-        (fn [data components]
-          ;; Find which of the components are used in the file.
-          (into #{}
-                (filter #(ctf/used-in? data file-id % :component))
-                components))
+        deleted-components
+        (ctkl/deleted-components-seq data)
 
-        get-unused-components
-        (fn [components files]
-          ;; Find and return a set of unused components (on all files).
-          (reduce (fn [components {:keys [data]}]
-                    (if (seq components)
-                      (->> (get-used-components data components)
-                           (set/difference components))
-                      (reduced components)))
+        xform-map-id
+        (map :id)
 
-                  components
-                  files))
+        xform
+        (mapcat (partial get-used-components deleted-components file-id))
 
-        process-fdata
-        (fn [data unused]
-          (reduce (fn [data id]
-                    (l/trc :hint "delete component"
-                           :component-id (str id)
-                           :file-id (str file-id))
-                    (ctkl/delete-component data id))
-                  data
-                  unused))
+        xform-with-decoding
+        (comp
+         (map (partial decode-file cfg))
+         xform)
 
-        deleted (into #{} (ctkl/deleted-components-seq data))
+        used-remote
+        (->> (db/plan conn [sql:get-files-for-library file-id] plan-opts)
+             (transduce xform-with-decoding conj #{}))
 
-        unused  (->> (db/cursor conn [sql:get-files-for-library file-id] {:chunk-size 1})
-                     (map (partial decode-file cfg))
-                     (cons file)
-                     (get-unused-components deleted)
-                     (mapv :id)
-                     (set))
+        used-local
+        (into #{} xform [file])
 
-        file    (update file :data process-fdata unused)]
+        unused
+        (transduce xform-map-id disj
+                   (into #{} xform-map-id deleted-components)
+                   (concat used-remote used-local))
 
+        file
+        (update file :data
+                (fn [data]
+                  (reduce (fn [data id]
+                            (l/trc :hint "delete component"
+                                   :component-id (str id)
+                                   :file-id (str file-id))
+                            (ctkl/delete-component data id))
+                          data
+                          unused)))]
 
     (l/dbg :hint "clean" :rel "components" :file-id (str file-id) :total (count unused))
     file))
