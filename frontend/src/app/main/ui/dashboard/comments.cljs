@@ -48,7 +48,7 @@
         [:div {:class (stl/css :unread)}])]]))
 
 (mf/defc comments-section
-  [{:keys [profile team show? on-hide-comments]}]
+  [{:keys [profile team show? on-hide-comments on-read-all]}]
   (let [threads-map    (mf/deref refs/comment-threads)
         profiles       (mf/deref refs/profiles)
         team-id        (:id team)
@@ -82,6 +82,13 @@
       [:div {:class (stl/css :dropdown :comments-section :comment-threads-section)}
        [:div {:class (stl/css :header)}
         [:h3 {:class (stl/css :header-title)} (tr "dashboard.notifications")]
+        (when (seq tgroups)
+        [:> icon-button* {:variant "ghost"
+                          :tab-index (if show? "0" "-1")
+                          :aria-label (tr "labels.read")
+                          :on-click on-read-all
+                          :icon "tick"}])
+
         [:> icon-button* {:variant "ghost"
                           :tab-index (if show? "0" "-1")
                           :aria-label (tr "labels.close")

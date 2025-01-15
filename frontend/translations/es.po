@@ -1642,6 +1642,9 @@ msgstr "Canva"
 msgid "labels.close"
 msgstr "Cerrar"
 
+msgid "labels.read"
+msgstr "Marcar todo como leído"
+
 #: src/app/main/ui/workspace/tokens/sets.cljs:153
 msgid "labels.collapse"
 msgstr "Colapsar"

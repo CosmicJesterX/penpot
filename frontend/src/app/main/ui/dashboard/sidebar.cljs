@@ -959,7 +959,18 @@
         on-power-up-click
         (mf/use-fn
          (fn []
-           (dom/open-new-window "https://penpot.app/pricing")))]
+           (dom/open-new-window "https://penpot.app/pricing")))
+
+        handle-read-all
+        (mf/use-fn
+         (fn [event]
+           ;; TODO: mark all as read
+           (dom/prevent-default event)
+           (st/emit! (ntf/show {:level :info
+                                :type :toast
+                                ;; TODO: toast message
+                                :content (tr "Marked all notifications as read")
+                                :timeout 7000}))))]
 
     [:*
      [:button {:class (stl/css :upgrade-plan-section)
@@ -975,7 +986,8 @@
          :team team
          :show? show-comments?
          :on-show-comments handle-show-comments
-         :on-hide-comments handle-hide-comments}])
+         :on-hide-comments handle-hide-comments
+         :on-read-all handle-read-all}])
 
      [:div {:class (stl/css :profile-section)}
       [:button {:class (stl/css :profile)
