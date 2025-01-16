@@ -1,9 +1,7 @@
 use skia_safe as skia;
-use std::{array::TryFromSliceError, collections::HashMap};
+use std::array::TryFromSliceError;
 
-use crate::math::{self, Point};
-
-use super::{Stroke, StrokeKind};
+use crate::math::Point;
 
 fn stringify_slice_err(_: TryFromSliceError) -> String {
     format!("Error deserializing path")
@@ -139,48 +137,7 @@ impl TryFrom<Vec<RawPathData>> for Path {
 }
 
 impl Path {
-    pub fn draw_stroke_on_path(
-        canvas: &skia::Canvas,
-        stroke: &Stroke,
-        path: &Path,
-        selrect: &math::Rect,
-        path_transform: Option<&skia::Matrix>,
-        svg_attrs: &HashMap<String, String>,
-    ) {
-        let mut skia_path = path.to_skia_path();
-        skia_path.transform(path_transform.unwrap());
 
-        let paint_stroke = stroke.to_stroked_paint(stroke.kind, selrect);
-        // Draw the different kind of strokes for a path requires different strategies:
-        match stroke.kind {
-            // For inner stroke we draw a center stroke (with double width) and clip to the original path (that way the extra outer stroke is removed)
-            StrokeKind::InnerStroke => {
-                canvas.clip_path(&skia_path, skia::ClipOp::Intersect, true);
-                canvas.draw_path(&skia_path, &paint_stroke);
-            }
-            // For center stroke we don't need to do anything extra
-            StrokeKind::CenterStroke => {
-                canvas.draw_path(&skia_path, &paint_stroke);
-            }
-            // For outer stroke we draw a center stroke (with double width) and use another path with blend mode clear to remove the inner stroke added
-            StrokeKind::OuterStroke => {
-                let mut paint = skia::Paint::default();
-                paint.set_blend_mode(skia::BlendMode::SrcOver);
-                paint.set_anti_alias(true);
-                let layer_rec = skia::canvas::SaveLayerRec::default().paint(&paint);
-                canvas.save_layer(&layer_rec);
-
-                canvas.draw_path(&skia_path, &paint_stroke);
-
-                let mut clear_paint = skia::Paint::default();
-                clear_paint.set_blend_mode(skia::BlendMode::Clear);
-                clear_paint.set_anti_alias(true);
-                canvas.draw_path(&skia_path, &clear_paint);
-
-                canvas.restore();
-            }
-        }
-    }
 
     pub fn to_skia_path(&self) -> skia::Path {
         self.skia_path.snapshot()
