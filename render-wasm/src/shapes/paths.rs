@@ -137,8 +137,6 @@ impl TryFrom<Vec<RawPathData>> for Path {
 }
 
 impl Path {
-
-
     pub fn to_skia_path(&self) -> skia::Path {
         self.skia_path.snapshot()
     }

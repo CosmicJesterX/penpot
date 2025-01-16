@@ -163,15 +163,15 @@ impl RenderState {
             .reset_matrix();
     }
 
-    pub fn render_single_element(&mut self, element: &mut Shape) {
-        // element
+    pub fn render_shape(&mut self, shape: &mut Shape) {
+        // shape
         //     .render(&mut self.drawing_surface, &self.images, &self.font_provider)
         //     .unwrap();
 
-        let transform = element.transform.to_skia_matrix();
+        let transform = shape.transform.to_skia_matrix();
 
         // Check transform-matrix code from common/src/app/common/geom/shapes/transforms.cljc
-        let center = element.bounds().center();
+        let center = shape.bounds().center();
         let mut matrix = skia::Matrix::new_identity();
         matrix.pre_translate(center);
         matrix.pre_concat(&transform);
@@ -179,25 +179,40 @@ impl RenderState {
 
         self.drawing_surface.canvas().concat(&matrix);
 
-        match &element.kind {
+        match &shape.kind {
             Kind::SVGRaw(sr) => {
-                if let Some(svg) = element.svg.as_ref() {
-                    render_cached_svg(svg, &mut self.drawing_surface);
+                if let Some(svg) = shape.svg.as_ref() {
+                    svg.render(self.drawing_surface.canvas())
                 } else {
-                    if let Some(svg) = render_svg(
-                        &sr.content.to_string(),
-                        &mut self.drawing_surface,
-                        &self.font_provider,
-                    ) {
-                        element.set_svg(svg);
+                    let font_manager = skia::FontMgr::from(self.font_provider.clone());
+                    let dom_result = skia::svg::Dom::from_str(sr.content.to_string(), font_manager);
+                    match dom_result {
+                        Ok(dom) => {
+                            dom.render(self.drawing_surface.canvas());
+                            shape.set_svg(dom);
+                        }
+                        Err(e) => {
+                            eprintln!("Error parsing SVG. Error: {}", e);
+                        }
                     }
                 }
             }
             _ => {
-                render_fills_and_strokes(
-                    self,
-                    element
-                );
+                for fill in shape.fills().rev() {
+                    fills::render(
+                        self,
+                        shape,
+                        fill,
+                    );
+                }
+
+                for stroke in shape.strokes().rev() {
+                    strokes::render(
+                        self,
+                        shape,
+                        stroke,
+                    );
+                }
             }
         };
 
@@ -377,7 +392,7 @@ impl RenderState {
             self.drawing_surface.canvas().save();
 
             if !root_id.is_nil() {
-                self.render_single_element(&mut element.clone());
+                self.render_shape(&mut element.clone());
                 if element.clip() {
                     self.drawing_surface.canvas().clip_rect(
                         element.bounds(),
@@ -403,50 +418,5 @@ impl RenderState {
             return false;
         }
 
-    }
-}
-
-pub fn render_fills_and_strokes(
-    render_state: &mut RenderState,
-    shape: &Shape,
-) {
-    for fill in shape.fills().rev() {
-        fills::render(
-            render_state,
-            shape,
-            fill,
-        );
-    }
-
-    for stroke in shape.strokes().rev() {
-        strokes::render(
-            render_state,
-            shape,
-            stroke,
-        );
-    }
-}
-
-
-fn render_cached_svg(dom: &skia::svg::Dom, surface: &mut skia::Surface) {
-    dom.render(surface.canvas());
-}
-
-fn render_svg(
-    svg: &str,
-    surface: &mut skia::Surface,
-    font_provider: &skia::textlayout::TypefaceFontProvider,
-) -> Option<skia::svg::Dom> {
-    let font_manager = skia::FontMgr::from(font_provider.clone());
-    let dom_result = skia::svg::Dom::from_str(svg, font_manager);
-    match dom_result {
-        Ok(dom) => {
-            dom.render(surface.canvas());
-            Some(dom)
-        }
-        Err(e) => {
-            eprintln!("Error parsing SVG. Error: {}", e);
-            None
-        }
     }
 }
