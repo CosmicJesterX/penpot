@@ -9,6 +9,9 @@
    [app.common.data.macros :as dm]
    [app.main.style :as stl])
   (:require
+   [app.common.data :as d]
+   [app.util.avatars :as avatars]
+   [app.config :as cfg]
    [app.main.ui.ds.foundations.typography :as t]
    [app.main.ui.ds.foundations.typography.text :refer [text*]]
    [rumext.v2 :as mf]))
@@ -16,17 +19,37 @@
 (def ^:private schema:avatar
   [:map
    [:class {:optional true} :string]
-   [:title :string]])
+   [:tag {:optional true} :string]
+   [:name :string]
+   [:url {:optional true} [:maybe :string]]
+   [:color :string]
+   [:selected {:optional true} :boolean]
+   [:variant {:optional true}
+    [:maybe [:enum "S" "M" "L"]]]])
 
 (mf/defc avatar*
   {::mf/props :obj
    ::mf/schema schema:avatar}
-  [{:keys [class title children] :rest props}]
 
-  (let [class (dm/str class " " (stl/css :cta))
-        props (mf/spread-props props {:class class :data-testid "cta"})]
-    [:> "div" props
-     [:div {:class (stl/css :cta-title)}
-      [:> text* {:as "span" :typography t/title-medium :class (stl/css :placeholder-title)} title]]
-     [:div {:class (stl/css :cta-message)}
-      children]]))
+  [{:keys [tag class name color url selected variant] :rest props}]
+  (let [variant (or variant "S")
+        url
+        (if (and (some? url) (d/not-empty? url))
+          url
+          (avatars/generate {:name name :color color}))]
+    [:> (or tag "div")
+     {:class (dm/str
+              (stl/css-case :avatar true
+                            :is-selected selected
+                            :is-small (= variant "S")
+                            :is-medium (= variant "M")
+                            :is-large (= variant "L"))
+              (if class (dm/str " " class) "") )
+      :style { ;;:z-index (dm/str (+ 1 (* -1 index)))
+              ;; :background-color color
+              ;;
+              "--color" color
+              }
+      :title name}
+     [:div {:class (stl/css :avatar-image)}
+      [:img {:alt name :src url}]]]))

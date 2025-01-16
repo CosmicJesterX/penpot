@@ -4,35 +4,33 @@
 //
 // Copyright (c) KALEIDOS INC
 
+@use "../colors.scss" as *;
 @use "../_sizes.scss" as *;
 @use "../_borders.scss" as *;
+@use "../typography.scss" as t;
 
-// .empty-placeholder {
-//   display: grid;
-//   grid-template-columns: auto 1fr auto;
-//   place-content: center;
-//   background: none;
-//   color: var(--color-foreground-secondary);
-//   height: $sz-160;
-//   max-width: $sz-964;
-//   border-radius: $br-8;
-//   border: $b-1 solid var(--color-background-quaternary);
-// }
-// 
-// .text-wrapper {
-//   display: grid;
-//   grid-auto-rows: auto;
-//   align-self: center;
-//   justify-self: center;
-//   max-width: $sz-400;
-// }
-// 
-// .placeholder-title {
-//   color: var(--color-foreground-primary);
-// }
-// 
-// .svg-decor {
-//   height: $sz-160;
-//   width: $sz-200;
-//   color: var(--color-background-quaternary);
-// }
+:global(.light) {
+  --color-cta-background: #{$purple-100};
+  --color-cta-border: #{$purple-600-10};
+}
+
+:global(.default) {
+  --color-cta-border: #{$green-950};
+  --color-cta-background: #{$green-1000};
+}
+
+.cta {
+  border-radius: $br-8;
+  border: 1px solid var(--color-cta-border);
+  background: var(--color-cta-background);
+  padding: var(--sp-m);
+}
+
+.cta-message {
+  @include t.use-typography("body-small");
+  color: var(--color-foreground-secondary);
+
+  :global(a) {
+    color: var(--color-accent-primary);
+  }
+}

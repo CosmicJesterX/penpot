@@ -4,7 +4,7 @@
 ;;
 ;; Copyright (c) KALEIDOS INC
 
-(ns app.main.ui.ds.product.cta
+(ns app.main.ui.ds.utilities.date
   (:require-macros
    [app.common.data.macros :as dm]
    [app.main.style :as stl])
@@ -13,20 +13,21 @@
    [app.main.ui.ds.foundations.typography.text :refer [text*]]
    [rumext.v2 :as mf]))
 
-(def ^:private schema:cta
+(def ^:private schema:date
   [:map
    [:class {:optional true} :string]
    [:title :string]])
 
-(mf/defc cta*
+(mf/defc date*
   {::mf/props :obj
-   ::mf/schema schema:cta}
-  [{:keys [class title children] :rest props}]
+   ::mf/schema schema:date}
+  [{:keys [class title children date] :rest props}]
+  (.log js/console date)
 
   (let [class (dm/str class " " (stl/css :cta))
         props (mf/spread-props props {:class class :data-testid "cta"})]
     [:> "div" props
      [:div {:class (stl/css :cta-title)}
-      [:> text* {:as "span" :typography t/headline-small :class (stl/css :placeholder-title)} title]]
+      [:> text* {:as "span" :typography t/title-medium :class (stl/css :placeholder-title)} title]]
      [:div {:class (stl/css :cta-message)}
       children]]))

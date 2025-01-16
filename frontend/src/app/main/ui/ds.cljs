@@ -28,6 +28,7 @@
    [app.main.ui.ds.product.milestone :refer [milestone*]]
    [app.main.ui.ds.storybook :as sb]
    [app.main.ui.ds.utilities.swatch :refer [swatch*]]
+   [app.main.ui.ds.utilities.date :refer [date*]]
    [app.util.i18n :as i18n]
    [rumext.v2 :as mf]))
 
@@ -56,6 +57,7 @@
     :Cta cta*
     :Avatar avatar*
     :Milestone milestone*
+    :Date date*
     ;; meta / misc
     :meta
     {:icons (clj->js (sort icon-list))
