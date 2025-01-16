@@ -6,7 +6,12 @@ use crate::math::Rect;
 use crate::render::{ImageStore, Renderable};
 
 impl Renderable for Shape {
-    fn render(&self, surface: &mut skia_safe::Surface, images: &ImageStore) -> Result<(), String> {
+    fn render(
+        &self,
+        surface: &mut skia_safe::Surface,
+        images: &ImageStore,
+        scale: f32,
+    ) -> Result<(), String> {
         let transform = self.transform.to_skia_matrix();
 
         // Check transform-matrix code from common/src/app/common/geom/shapes/transforms.cljc
@@ -20,6 +25,7 @@ impl Renderable for Shape {
 
         for fill in self.fills().rev() {
             render_fill(
+                scale,
                 surface,
                 images,
                 fill,
@@ -89,6 +95,7 @@ impl Renderable for Shape {
 }
 
 fn render_fill(
+    scale: f32,
     surface: &mut skia::Surface,
     images: &ImageStore,
     fill: &Fill,
@@ -100,13 +107,17 @@ fn render_fill(
         (Fill::Image(image_fill), kind) => {
             let image = images.get(&image_fill.id());
             if let Some(image) = image {
+                // We increase slightly the fill depending on the scale level we have to avoid artifacts appearing in some situations
+                // like outer strokes with image fills
+                let mut container = selrect.clone();
+                container.inset(skia::Point::new(-(1. / scale), -(1. / scale)));
                 draw_image_fill_in_container(
                     surface.canvas(),
                     &image,
                     image_fill.size(),
                     kind,
                     &fill.to_paint(&selrect),
-                    &selrect,
+                    &container,
                     path_transform,
                 );
             }
@@ -411,22 +422,10 @@ fn draw_stroke_on_path(
             canvas.draw_path(&skia_path, &paint_stroke);
             handle_stroke_caps(&mut skia_path, stroke, selrect, canvas, path.is_open());
         }
-        // For outer stroke we draw a center stroke (with double width) and use another path with blend mode clear to remove the inner stroke added
+        // For inner stroke we draw a center stroke (with double width) and clip to the original path removing the extra inner stroke
         StrokeKind::OuterStroke => {
-            let mut paint = skia::Paint::default();
-            paint.set_blend_mode(skia::BlendMode::SrcOver);
-            paint.set_anti_alias(true);
-            let layer_rec = skia::canvas::SaveLayerRec::default().paint(&paint);
-            canvas.save_layer(&layer_rec);
-
+            canvas.clip_path(&skia_path, None, true);
             canvas.draw_path(&skia_path, &paint_stroke);
-
-            let mut clear_paint = skia::Paint::default();
-            clear_paint.set_blend_mode(skia::BlendMode::Clear);
-            clear_paint.set_anti_alias(true);
-            canvas.draw_path(&skia_path, &clear_paint);
-
-            canvas.restore();
         }
     }
 }
@@ -495,7 +494,6 @@ pub fn draw_image_fill_in_container(
         }
     }
 
-    // Draw the image with the calculated destination rectangle
     canvas.draw_image_rect(image, None, dest_rect, &paint);
 
     // Restore the canvas to remove the clipping
