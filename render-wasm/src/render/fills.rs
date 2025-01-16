@@ -1,5 +1,8 @@
+use crate::{
+    math,
+    shapes::{Fill, ImageFill, Kind, Shape},
+};
 use skia_safe::{self as skia, RRect};
-use crate::{math, shapes::{Fill, ImageFill, Kind, Shape}};
 
 use super::RenderState;
 
@@ -73,8 +76,8 @@ fn draw_image_fill_in_container(
         }
         Kind::SVGRaw(_) => {
             canvas.clip_rect(container, skia::ClipOp::Intersect, true);
-        },
-        Kind::Bool(_, _) => todo!()
+        }
+        Kind::Bool(_, _) => todo!(),
     }
 
     // Draw the image with the calculated destination rectangle
@@ -87,23 +90,14 @@ fn draw_image_fill_in_container(
 /**
  * This SHOULD be the only public function in this module.
  */
-pub fn render(
-    render_state: &mut RenderState,
-    shape: &Shape,
-    fill: &Fill
-) {
+pub fn render(render_state: &mut RenderState, shape: &Shape, fill: &Fill) {
     let canvas = render_state.drawing_surface.canvas();
     let selrect = shape.selrect;
     let path_transform = shape.to_path_transform();
     let kind = &shape.kind;
     match (fill, kind) {
         (Fill::Image(image_fill), kind) => {
-            draw_image_fill_in_container(
-                render_state,
-                shape,
-                fill,
-                image_fill
-            );
+            draw_image_fill_in_container(render_state, shape, fill, image_fill);
         }
         (_, Kind::Rect(rect, None)) => {
             canvas.draw_rect(rect, &fill.to_paint(&selrect));
@@ -124,6 +118,6 @@ pub fn render(
             }
             canvas.draw_path(&skia_path, &fill.to_paint(&selrect));
         }
-        (_, _) => todo!()
+        (_, _) => todo!(),
     }
 }

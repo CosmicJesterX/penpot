@@ -7,23 +7,23 @@ use crate::render::BlendMode;
 
 mod blurs;
 mod bools;
+mod circles;
 mod fills;
 mod images;
 mod matrix;
 mod paths;
 mod rects;
-mod circles;
 mod strokes;
 mod svgraw;
 
 pub use blurs::*;
 pub use bools::*;
+pub use circles::*;
 pub use fills::*;
 pub use images::*;
 use matrix::*;
 pub use paths::*;
 pub use rects::*;
-pub use circles::*;
 pub use strokes::*;
 pub use svgraw::*;
 

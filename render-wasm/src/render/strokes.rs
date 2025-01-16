@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
-use skia_safe::{self as skia, RRect};
 use crate::math::{self, Rect};
 use crate::shapes::{Corners, Fill, ImageFill, Kind, Path, Shape, Stroke, StrokeCap, StrokeKind};
+use skia_safe::{self as skia, RRect};
 
 use super::RenderState;
 
@@ -384,11 +384,7 @@ fn draw_image_stroke_in_container(
 /**
  * This SHOULD be the only public function in this module.
  */
-pub fn render(
-    render_state: &mut RenderState,
-    shape: &Shape,
-    stroke: &Stroke
-) {
+pub fn render(render_state: &mut RenderState, shape: &Shape, stroke: &Stroke) {
     let canvas = render_state.drawing_surface.canvas();
     let images = &render_state.images;
     let selrect = shape.selrect;
@@ -398,12 +394,7 @@ pub fn render(
     if let Fill::Image(image_fill) = &stroke.fill {
         let svg_attrs = &shape.svg_attrs;
         if let Some(image) = images.get(&image_fill.id()) {
-            draw_image_stroke_in_container(
-                render_state,
-                shape,
-                stroke,
-                image_fill
-            );
+            draw_image_stroke_in_container(render_state, shape, stroke, image_fill);
         }
     } else {
         match kind {
@@ -413,9 +404,16 @@ pub fn render(
             Kind::Circle(rect) => draw_stroke_on_circle(canvas, stroke, rect, &selrect),
             Kind::Path(path) | Kind::Bool(_, path) => {
                 let svg_attrs = &shape.svg_attrs;
-                draw_stroke_on_path(canvas, stroke, path, &selrect, path_transform.as_ref(), svg_attrs);
+                draw_stroke_on_path(
+                    canvas,
+                    stroke,
+                    path,
+                    &selrect,
+                    path_transform.as_ref(),
+                    svg_attrs,
+                );
             }
-            Kind::SVGRaw(_) => todo!()
+            Kind::SVGRaw(_) => todo!(),
         }
     }
 }

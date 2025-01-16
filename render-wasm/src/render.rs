@@ -1,18 +1,18 @@
-use skia_safe as skia;
 use skia::{Contains, RRect};
+use skia_safe as skia;
 use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::view::Viewbox;
 
 mod blend;
+mod fills;
 mod gpu_state;
 mod images;
 mod options;
 mod strokes;
-mod fills;
 
-use crate::shapes::{CircleShape, Fill, Kind, Shape, Stroke};
+use crate::shapes::{Kind, Shape};
 use gpu_state::GpuState;
 use options::RenderOptions;
 
@@ -199,19 +199,11 @@ impl RenderState {
             }
             _ => {
                 for fill in shape.fills().rev() {
-                    fills::render(
-                        self,
-                        shape,
-                        fill,
-                    );
+                    fills::render(self, shape, fill);
                 }
 
                 for stroke in shape.strokes().rev() {
-                    strokes::render(
-                        self,
-                        shape,
-                        stroke,
-                    );
+                    strokes::render(self, shape, stroke);
                 }
             }
         };
@@ -417,6 +409,5 @@ impl RenderState {
             eprintln!("Error: Element with root_id {root_id} not found in the tree.");
             return false;
         }
-
     }
 }

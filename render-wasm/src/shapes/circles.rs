@@ -1,4 +1,2 @@
 #[derive(Debug, Clone, PartialEq)]
-pub struct CircleShape {
-
-}
+pub struct CircleShape {}
