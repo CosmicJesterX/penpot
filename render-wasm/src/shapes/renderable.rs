@@ -165,28 +165,24 @@ fn render_stroke(
             );
         }
     } else {
-      let repetitions = 2;
-
-      for _ in 0..repetitions {
-          match kind {
-              Kind::Rect(rect, corners) => {
-                  draw_stroke_on_rect(surface.canvas(), scale, stroke, rect, &selrect, corners);
-              }
-              Kind::Circle(rect) => {
-                  draw_stroke_on_circle(surface.canvas(), scale, stroke, rect, &selrect);
-              }
-              Kind::Path(path) | Kind::Bool(_, path) => {
-                  draw_stroke_on_path(
-                      surface.canvas(),
-                      scale,
-                      stroke,
-                      path,
-                      &selrect,
-                      path_transform,
-                  );
-              }
-          }
-      }
+        match kind {
+            Kind::Rect(rect, corners) => {
+                draw_stroke_on_rect(surface.canvas(), scale, stroke, rect, &selrect, corners);
+            }
+            Kind::Circle(rect) => {
+                draw_stroke_on_circle(surface.canvas(), scale, stroke, rect, &selrect);
+            }
+            Kind::Path(path) | Kind::Bool(_, path) => {
+                draw_stroke_on_path(
+                    surface.canvas(),
+                    scale,
+                    stroke,
+                    path,
+                    &selrect,
+                    path_transform,
+                );
+            }
+        }
     }
 }
 
@@ -435,7 +431,7 @@ fn draw_stroke_on_path(
     skia_path.transform(path_transform.unwrap());
 
     let kind = stroke.render_kind(path.is_open());
-    let paint_stroke = stroke.to_stroked_paint(kind.clone(), selrect, scale);
+    let mut paint_stroke = stroke.to_stroked_paint(kind.clone(), selrect, scale);
     // Draw the different kind of strokes for a path requires different strategies:
     match kind {
         // For inner stroke we draw a center stroke (with double width) and clip to the original path (that way the extra outer stroke is removed)
@@ -457,9 +453,12 @@ fn draw_stroke_on_path(
         }
         // For inner stroke we draw a center stroke (with double width) and clip to the original path removing the extra inner stroke
         StrokeKind::OuterStroke => {
+            canvas.save();
             canvas.clip_path(&skia_path, skia::ClipOp::Difference, true);
-            // println!("paint_stroke {:?}, {:?}", scale, paint_stroke);
-            // canvas.draw_path(&skia_path, &paint_stroke);
+            // Small extra inner stroke to overlap with the fill and avoid unnecesary artifacts
+            canvas.draw_path(&skia_path, &paint_stroke);
+            canvas.restore();
+            paint_stroke.set_stroke_width(1. / scale);
             canvas.draw_path(&skia_path, &paint_stroke);
         }
     }
@@ -589,22 +588,50 @@ pub fn draw_image_stroke_in_container(
     image_paint.set_blend_mode(skia::BlendMode::SrcIn);
     image_paint.set_anti_alias(true);
     // Compute scaled rect and clip to it
-    let dest_rect = calculate_scaled_rect(size, container, stroke.delta());
+    let mut dest_rect = calculate_scaled_rect(size, container, stroke.delta());
+    // dest_rect.inset(skia::Point::new(-(1. / scale), -(1. / scale)));
+    // dest_rect.inset(skia::Point::new(50., 50.));
+
     canvas.clip_rect(dest_rect, skia::ClipOp::Intersect, true);
     canvas.draw_image_rect(image, None, dest_rect, &image_paint);
 
     // Clear outer stroke for paths if necessary. When adding an outer stroke we need to empty the stroke added too in the inner area.
     if let Kind::Path(p) = kind {
         if stroke.render_kind(p.is_open()) == StrokeKind::OuterStroke {
+            // image_paint.set_stroke_width(10.);
+            // image_paint.set_color(skia::Color::RED);
+            // canvas.draw_path(&path, &image_paint);
+
             let mut path = p.to_skia_path();
             path.transform(path_transform.unwrap());
+
             let mut clear_paint = skia::Paint::default();
             clear_paint.set_blend_mode(skia::BlendMode::Clear);
             clear_paint.set_anti_alias(true);
             canvas.draw_path(&path, &clear_paint);
+
+
+            // let mut paint = stroke.to_paint(container, scale);
+            // clear_paint.set_blend_mode(skia::BlendMode::SrcIn);
+            // clear_paint.set_anti_alias(true);
+            // paint.set_stroke_width(15.);
+            // canvas.draw_path(&path, &paint);
+            
         }
     }
 
     // Restore canvas state
     canvas.restore();
+
+    // if let Kind::Path(p) = kind {
+    //     if stroke.render_kind(p.is_open()) == StrokeKind::OuterStroke {
+    //         let mut path = p.to_skia_path();
+    //         path.transform(path_transform.unwrap());
+    //         let mut paint = stroke.to_paint(container, scale);
+    //         // paint.set_stroke_width(1. / scale);
+    //         paint.set_stroke_width(5.);
+    //         // paint.set_color(skia::Color::RED);
+    //         canvas.draw_path(&path, &paint);
+    //     }
+    // }
 }

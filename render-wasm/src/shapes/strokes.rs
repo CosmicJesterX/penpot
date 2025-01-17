@@ -165,6 +165,7 @@ impl Stroke {
         let width = match self.kind {
             StrokeKind::InnerStroke => self.width,
             StrokeKind::CenterStroke => self.width,
+            // StrokeKind::OuterStroke => self.width + (1. / scale),
             StrokeKind::OuterStroke => self.width + (1. / scale),
         };
 
