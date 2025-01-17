@@ -189,8 +189,12 @@
 
                 shapes-by-color
                 (->> (ctc/extract-all-colors shapes file-id shared-libs)
-                     (group-by :attrs))]
-            (st/emit! (dwc/change-color-in-selected new-color (get shapes-by-color old-color) old-color))))))
+                     (group-by :attrs))
+
+                old-color (select-keys old-color [:id :color :opacity :file-id :gradient :image])
+                new-color (select-keys new-color [:id :color :opacity :file-id :gradient :image])]
+
+            (st/emit! (dwc/change-color-in-selected (get shapes-by-color old-color) new-color old-color))))))
 
     :getRoot
     (fn []

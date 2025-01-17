@@ -124,13 +124,14 @@
   [^js color]
   (when (some? color)
     (d/without-nils
-     {:id (-> (obj/get color "id") parse-id)
+     {:id (-> (or (obj/get color "id") (obj/get color "refId")) parse-id)
       :name (obj/get color "name")
       :path (obj/get color "path")
       :color (-> (obj/get color "color") parse-hex)
       :opacity (obj/get color "opacity")
       :ref-id (-> (obj/get color "refId") parse-id)
       :ref-file (-> (obj/get color "refFile") parse-id)
+      :file-id (-> (obj/get color "refFile") parse-id)
       :gradient (-> (obj/get color "gradient") parse-gradient)
       :image (-> (obj/get color "image") parse-image-data)})))
 

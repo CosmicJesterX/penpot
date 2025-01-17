@@ -48,6 +48,7 @@
     :$file {:enumerable false :get (constantly file-id)}
 
     :id {:get (fn [] (dm/str id))}
+    :refFile {:get #(dm/str file-id)}
 
     :name
     {:this true
