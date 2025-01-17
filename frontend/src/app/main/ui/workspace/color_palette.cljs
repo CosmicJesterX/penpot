@@ -46,7 +46,7 @@
            :title (uc/get-color-name color)
            :on-click select-color}
      #_[:& cb/color-bullet {:color color}]
-    (js/console.log "Selected color:" color)
+     (js/console.log "Selected color:" (pr-str color))
      [:> swatch* {:background color :size "medium"}]
      [:& cb/color-name {:color color :size size :origin :palette}]]))
 
