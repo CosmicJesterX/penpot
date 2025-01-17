@@ -14,6 +14,7 @@
    [app.main.refs :as refs]
    [app.main.store :as st]
    [app.main.ui.components.color-bullet :as cb]
+   [app.main.ui.ds.utilities.swatch :refer [swatch*]]
    [app.main.ui.hooks :as h]
    [app.main.ui.icons :as i]
    [app.util.color :as uc]
@@ -44,7 +45,9 @@
                    :no-text (<= size 64))
            :title (uc/get-color-name color)
            :on-click select-color}
-     [:& cb/color-bullet {:color color}]
+     #_[:& cb/color-bullet {:color color}]
+    (js/console.log "Selected color:" color)
+     [:> swatch* {:background color :size "medium"}]
      [:& cb/color-name {:color color :size size :origin :palette}]]))
 
 (mf/defc palette*
