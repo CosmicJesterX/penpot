@@ -11,6 +11,7 @@ mod gpu_state;
 mod images;
 mod options;
 mod strokes;
+mod debug;
 
 use crate::shapes::{Kind, Shape};
 use gpu_state::GpuState;
@@ -307,51 +308,9 @@ impl RenderState {
         Ok(())
     }
 
-    fn render_debug_view(&mut self) {
-        let mut paint = skia::Paint::default();
-        paint.set_style(skia::PaintStyle::Stroke);
-        paint.set_color(skia::Color::from_argb(255, 255, 0, 255));
-        paint.set_stroke_width(1.);
-
-        let mut scaled_rect = self.viewbox.area.clone();
-        let x = 100. + scaled_rect.x() * 0.2;
-        let y = 100. + scaled_rect.y() * 0.2;
-        let width = scaled_rect.width() * 0.2;
-        let height = scaled_rect.height() * 0.2;
-        scaled_rect.set_xywh(x, y, width, height);
-
-        self.debug_surface.canvas().draw_rect(scaled_rect, &paint);
-    }
-
-    fn render_debug_element(&mut self, element: &Shape, intersected: bool) {
-        let mut paint = skia::Paint::default();
-        paint.set_style(skia::PaintStyle::Stroke);
-        paint.set_color(if intersected {
-            skia::Color::from_argb(255, 255, 255, 0)
-        } else {
-            skia::Color::from_argb(255, 0, 255, 255)
-        });
-        paint.set_stroke_width(1.);
-
-        let mut scaled_rect = element.bounds();
-        let x = 100. + scaled_rect.x() * 0.2;
-        let y = 100. + scaled_rect.y() * 0.2;
-        let width = scaled_rect.width() * 0.2;
-        let height = scaled_rect.height() * 0.2;
-        scaled_rect.set_xywh(x, y, width, height);
-
-        self.debug_surface.canvas().draw_rect(scaled_rect, &paint);
-    }
 
     fn render_debug(&mut self) {
-        let paint = skia::Paint::default();
-        self.render_debug_view();
-        self.debug_surface.draw(
-            &mut self.final_surface.canvas(),
-            (0.0, 0.0),
-            skia::SamplingOptions::new(skia::FilterMode::Linear, skia::MipmapMode::Nearest),
-            Some(&paint),
-        );
+        debug::render(self);
     }
 
     // Returns a boolean indicating if the viewbox contains the rendered shapes
@@ -361,12 +320,12 @@ impl RenderState {
 
             if !root_id.is_nil() {
                 if !element.bounds().intersects(self.viewbox.area) || element.hidden() {
-                    self.render_debug_element(element, false);
+                    debug::render_debug_element(self, element, false);
                     // TODO: This means that not all the shapes are rendered so we
                     // need to call a render_all on the zoom out.
                     return is_complete; // TODO return is_complete or return false??
                 } else {
-                    self.render_debug_element(element, true);
+                    debug::render_debug_element(self, element, true);
                 }
             }
 
