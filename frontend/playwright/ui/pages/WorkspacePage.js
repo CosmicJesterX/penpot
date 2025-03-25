@@ -70,6 +70,7 @@ export class WorkspacePage extends BaseWebSocketPage {
     );
     this.toolbarOptions = page.getByTestId("toolbar-options");
     this.rectShapeButton = page.getByRole("button", { name: "Rectangle (R)" });
+    this.moveButton = page.getByRole("button", { name: "Move (V)" });
     this.boardButton = page.getByRole("button", { name: "Board (B)" });
     this.toggleToolbarButton = page.getByRole("button", {
       name: "Toggle toolbar",
@@ -88,9 +89,19 @@ export class WorkspacePage extends BaseWebSocketPage {
     this.tokensUpdateCreateModal = page.getByTestId(
       "token-update-create-modal",
     );
+    this.tokenThemeUpdateCreateModal = page.getByTestId(
+      "token-theme-update-create-modal",
+    );
     this.tokenThemesSetsSidebar = page.getByTestId("token-themes-sets-sidebar");
+    this.tokensSidebar = page.getByTestId("tokens-sidebar");
     this.tokenSetItems = page.getByTestId("tokens-set-item");
     this.tokenSetGroupItems = page.getByTestId("tokens-set-group-item");
+    this.tokenContextMenuForToken = page.getByTestId(
+      "tokens-context-menu-for-token",
+    );
+    this.tokenContextMenuForSet = page.getByTestId(
+      "tokens-context-menu-for-set",
+    );
   }
 
   async goToWorkspace({
@@ -160,6 +171,25 @@ export class WorkspacePage extends BaseWebSocketPage {
     );
   }
 
+  async setupFileWithComments() {
+    await this.mockRPC(
+      "get-comment-threads?file-id=*",
+      "workspace/get-comment-threads-unread.json",
+    );
+    await this.mockRPC(
+      "get-file-fragment?file-id=*&fragment-id=*",
+      "viewer/get-file-fragment-single-board.json",
+    );
+    await this.mockRPC(
+      "get-comments?thread-id=*",
+      "workspace/get-thread-comments.json",
+    );
+    await this.mockRPC(
+      "update-comment-thread-status",
+      "workspace/update-comment-thread-status.json",
+    );
+  }
+
   async clickWithDragViewportAt(x, y, width, height) {
     await this.page.waitForTimeout(100);
     await this.viewport.hover({ position: { x, y } });
@@ -217,7 +247,7 @@ export class WorkspacePage extends BaseWebSocketPage {
   }
 
   async openLibrariesModal(clickOptions = {}) {
-    await this.sidebar.getByText("Libraries").click(clickOptions);
+    await this.sidebar.getByTestId("libraries").click(clickOptions);
     await expect(this.librariesModal).toBeVisible();
   }
 
@@ -249,5 +279,16 @@ export class WorkspacePage extends BaseWebSocketPage {
 
   async clickTogglePalettesVisibility(clickOptions = {}) {
     await this.togglePalettesVisibility.click(clickOptions);
+  }
+
+  async openTokenThemesModal(clickOptions = {}) {
+    await this.tokenThemesSetsSidebar.getByText("Edit").click(clickOptions);
+    await expect(this.tokenThemeUpdateCreateModal).toBeVisible();
+  }
+
+  async showComments(clickOptions = {}) {
+    await this.page
+      .getByRole("button", { name: "Comments (C)" })
+      .click(clickOptions);
   }
 }

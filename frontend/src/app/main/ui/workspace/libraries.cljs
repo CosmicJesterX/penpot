@@ -14,7 +14,6 @@
    [app.common.types.file :as ctf]
    [app.common.types.typographies-list :as ctyl]
    [app.common.uuid :as uuid]
-   [app.config :as cf]
    [app.main.data.dashboard :as dd]
    [app.main.data.modal :as modal]
    [app.main.data.notifications :as ntf]
@@ -143,6 +142,8 @@
   (let [id         (:id library)
         importing? (deref importing)
 
+        team-id    (mf/use-ctx ctx/current-team-id)
+
         on-error
         (mf/use-fn
          (fn [_]
@@ -151,11 +152,13 @@
 
         on-success
         (mf/use-fn
+         (mf/deps team-id)
          (fn [_]
-           (st/emit! (dtm/fetch-shared-files))))
+           (st/emit! (dtm/fetch-shared-files team-id))))
 
         import-library
         (mf/use-fn
+         (mf/deps on-success on-error)
          (fn [_]
            (reset! importing id)
            (st/emit! (dd/clone-template
@@ -176,15 +179,7 @@
 (defn- empty-library?
   "Check if currentt library summary has elements or not"
   [summary]
-  (let [colors       (or (-> summary :colors :count) 0)
-        components   (or (-> summary :components :count) 0)
-        media        (or (-> summary :media :count) 0)
-        typographies (or (-> summary :typographies :count) 0)]
-
-    (and (zero? colors)
-         (zero? components)
-         (zero? media)
-         (zero? typographies))))
+  (boolean (:is-empty summary)))
 
 (mf/defc libraries-tab*
   {::mf/props :obj
@@ -253,10 +248,12 @@
         (mf/use-fn
          (mf/deps file-id)
          #(st/emit! (dwl/set-file-shared file-id false)
-                    (modal/show :libraries-dialog {})))
+                    (modal/show :libraries-dialog {:file-id file-id})))
 
         on-delete-cancel
-        (mf/use-fn #(st/emit! (modal/show :libraries-dialog {})))
+        (mf/use-fn
+         (mf/deps file-id)
+         #(st/emit! (modal/show :libraries-dialog {:file-id file-id})))
 
         publish
         (mf/use-fn
@@ -264,7 +261,7 @@
          (fn [event]
            (let [input-node (dom/get-target event)
                  publish-library #(st/emit! (dwl/set-file-shared file-id true))
-                 cancel-publish #(st/emit! (modal/show :libraries-dialog {}))]
+                 cancel-publish #(st/emit! (modal/show :libraries-dialog {:file-id file-id}))]
              (if empty-library?
                (st/emit! (modal/show
                           {:type :confirm
@@ -362,7 +359,7 @@
              (nil? shared-libraries)
              (tr "workspace.libraries.loading")
 
-             (and (str/empty? search-term) (cf/external-feature-flag "templates-03" "test"))
+             (str/empty? search-term)
              [:*
               [:div {:class (stl/css :sample-libraries-info)}
                (tr "workspace.libraries.empty.no-libraries")
@@ -376,19 +373,6 @@
                  [:> sample-library-entry*
                   {:library library
                    :importing importing*}])]]
-
-             (str/empty? search-term)
-             [:*
-              [:span {:class (stl/css :empty-state-icon)}
-               library-icon]
-              (tr "workspace.libraries.no-shared-libraries-available")
-              (when (cf/external-feature-flag "templates-01" "test")
-                [:div {:class (stl/css :templates-info)}
-                 (tr "workspace.libraries.more-templates")
-                 [:a {:target "_blank"
-                      :class (stl/css :templates-info-link)
-                      :href "https://penpot.app/libraries-templates"}
-                  (tr "workspace.libraries.more-templates-link")]])]
 
              :else
              (tr "workspace.libraries.no-matches-for" search-term))]))]]))
@@ -581,16 +565,14 @@
 (mf/defc libraries-dialog
   {::mf/register modal/components
    ::mf/register-as :libraries-dialog}
-  [{:keys [starting-tab] :as props :or {starting-tab :libraries}}]
-  (let [;; NOTE: we don't want to react on file changes, we just want
-        ;; a snapshot of file on the momento of open the dialog
-        file           (deref refs/file)
-
-        file-id        (:id file)
-        shared?        (:is-shared file)
+  [{:keys [starting-tab file-id] :as props :or {starting-tab :libraries}}]
+  (let [files   (mf/deref refs/files)
+        file    (get files file-id)
+        shared? (:is-shared file)
 
         linked-libraries
-        (mf/deref refs/files)
+        (mf/with-memo [files file-id]
+          (refs/select-libraries files file-id))
 
         linked-libraries
         (mf/with-memo [linked-libraries file-id]

@@ -6,7 +6,6 @@
 
 @use "../../ds/typography.scss" as *;
 @import "refactor/common-refactor.scss";
-@import "./common.scss";
 
 .sidebar-wrapper {
   display: grid;
@@ -36,6 +35,7 @@
 
 .sets-sidebar {
   position: relative;
+  padding-block-end: $s-16;
 }
 
 .themes-header {
@@ -55,17 +55,11 @@
   color: var(--color-foreground-secondary);
 }
 
-.empty-sets-wrapper {
-  padding: $s-12;
-  padding-inline-start: $s-24;
-  color: var(--color-foreground-secondary);
-}
-
 .sidebar-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-left: $s-8;
+  margin-left: $s-12;
   padding-top: $s-12;
   color: var(--layer-row-foreground-color);
 }
@@ -82,8 +76,8 @@
 
 .section-text-icon {
   font-size: $fs-12;
-  width: 16px;
-  height: 16px;
+  width: $s-16;
+  height: $s-16;
   display: flex;
   place-content: center;
 }
@@ -133,6 +127,19 @@
   &:hover {
     color: var(--menu-foreground-color-hover);
   }
+}
+
+.import-export-menu-item-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.import-menu-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex: 1;
 }
 
 .theme-select-wrapper {

@@ -82,9 +82,10 @@ Where type is:
 - :wrench: `:wrench:` a commit for config updates
 - :zap: `:zap:` a commit with performance improvements
 - :whale: `:whale:` a commit for docker related stuff
-- :rewind: `:rewind:` a commit that reverts changes
 - :paperclip: `:paperclip:` a commit with other not relevant changes
 - :arrow_up: `:arrow_up:` a commit with dependencies updates
+- :arrow_down: `:arrow_down:` a commit with dependencies downgrades
+- :fire: `:fire:` a commit that removes files or code
 
 More info:
  - https://gist.github.com/parmentf/035de27d6ed1dce0b36a

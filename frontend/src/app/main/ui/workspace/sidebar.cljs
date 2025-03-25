@@ -9,6 +9,7 @@
   (:require
    [app.common.data.macros :as dm]
    [app.main.data.common :as dcm]
+   [app.main.data.event :as ev]
    [app.main.data.workspace :as dw]
    [app.main.features :as features]
    [app.main.refs :as refs]
@@ -30,9 +31,10 @@
    [app.main.ui.workspace.sidebar.shortcuts :refer [shortcuts-container]]
    [app.main.ui.workspace.sidebar.sitemap :refer [sitemap]]
    [app.main.ui.workspace.sidebar.versions :refer [versions-toolbox*]]
-   [app.main.ui.workspace.tokens.sidebar :refer [tokens-sidebar-tab]]
+   [app.main.ui.workspace.tokens.sidebar :refer [tokens-sidebar-tab*]]
    [app.util.debug :as dbg]
    [app.util.i18n :refer [tr]]
+   [potok.v2.core :as ptk]
    [rumext.v2 :as mf]))
 
 ;; --- Left Sidebar (Component)
@@ -48,12 +50,13 @@
               :size "s"
               :aria-label (tr "workspace.sidebar.collapse")}]])
 
-(mf/defc left-sidebar
+(mf/defc left-sidebar*
   {::mf/wrap [mf/memo]
    ::mf/props :obj}
   [{:keys [layout file page-id] :as props}]
   (let [options-mode   (mf/deref refs/options-mode-global)
         project        (mf/deref refs/project)
+        file-id        (get file :id)
 
         design-tokens? (features/use-feature "design-tokens/v1")
         mode-inspect?  (= options-mode :inspect)
@@ -76,7 +79,7 @@
          on-lost-pointer-capture-pages  :on-lost-pointer-capture
          on-pointer-move-pages :on-pointer-move
          size-pages-opened :size}
-        (use-resize-hook :sitemap 200 38 400 :y false nil)
+        (use-resize-hook :sitemap 200 38 "0.6" :y false nil)
 
         show-pages?    (mf/use-state true)
         toggle-pages   (mf/use-fn #(reset! show-pages? not))
@@ -87,7 +90,11 @@
         (mf/use-fn #(st/emit! (dw/toggle-layout-flag :collapse-left-sidebar)))
 
         on-tab-change
-        (mf/use-fn #(st/emit! (dcm/go-to-workspace :layout (keyword %))))
+        (mf/use-fn
+         (fn [id]
+           (when (= id "tokens")
+             (st/emit! (ptk/event ::ev/event {::ev/name "open-tokens-tab"})))
+           (st/emit! (dcm/go-to-workspace :layout (keyword id)))))
 
         layers-tab
         (mf/html
@@ -110,11 +117,11 @@
 
 
         assets-tab
-        (mf/html [:& assets-toolbox {:size (- size 58)}])
+        (mf/html [:& assets-toolbox {:size (- size 58) :file-id file-id}])
 
         tokens-tab
         (when design-tokens?
-          (mf/html [:& tokens-sidebar-tab]))
+          (mf/html [:> tokens-sidebar-tab*]))
 
         tabs
         (if ^boolean mode-inspect?
@@ -179,9 +186,8 @@
 
 ;; --- Right Sidebar (Component)
 
-(mf/defc right-sidebar
-  {::mf/wrap-props false
-   ::mf/wrap [mf/memo]}
+(mf/defc right-sidebar*
+  {::mf/wrap [mf/memo]}
   [{:keys [layout section file page-id] :as props}]
   (let [drawing-tool     (:tool (mf/deref refs/workspace-drawing))
 

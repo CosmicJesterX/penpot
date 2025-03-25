@@ -6,6 +6,7 @@
 
 (ns app.rpc.commands.teams-invitations
   (:require
+   [app.common.data :as d]
    [app.common.data.macros :as dm]
    [app.common.exceptions :as ex]
    [app.common.features :as cfeat]
@@ -15,7 +16,6 @@
    [app.common.uuid :as uuid]
    [app.config :as cf]
    [app.db :as db]
-   [app.db.sql :as sql]
    [app.email :as eml]
    [app.loggers.audit :as audit]
    [app.main :as-alias main]
@@ -33,7 +33,6 @@
    [cuerdas.core :as str]))
 
 ;; --- Mutation: Create Team Invitation
-
 
 (def sql:upsert-team-invitation
   "insert into team_invitation(id, team_id, email_to, created_by, role, valid_until)
@@ -79,26 +78,22 @@
    [:role ::types.team/role]
    [:email ::sm/email]])
 
-(def ^:private check-create-invitation-params!
+(def ^:private check-create-invitation-params
   (sm/check-fn schema:create-invitation))
+
+(defn- allow-invitation-emails?
+  [member]
+  (let [notifications (dm/get-in member [:props :notifications])]
+    (not= :none (:email-invites notifications))))
 
 (defn- create-invitation
   [{:keys [::db/conn] :as cfg} {:keys [team profile role email] :as params}]
 
-  (dm/assert!
-   "expected valid connection on cfg parameter"
-   (db/connection? conn))
-
-  (dm/assert!
-   "expected valid params for `create-invitation` fn"
-   (check-create-invitation-params! params))
+  (assert (db/connection? conn) "expected valid connection on cfg parameter")
+  (assert (check-create-invitation-params params))
 
   (let [email  (profile/clean-email email)
         member (profile/get-profile-by-email conn email)]
-
-    (teams/check-profile-muted conn member)
-    (teams/check-email-bounce conn email true)
-    (teams/check-email-spam conn email true)
 
     ;; When we have email verification disabled and invitation user is
     ;; already present in the database, we proceed to add it to the
@@ -125,62 +120,65 @@
 
         nil)
 
-      (let [id         (uuid/next)
-            expire     (dt/in-future "168h") ;; 7 days
-            invitation (db/exec-one! conn [sql:upsert-team-invitation id
-                                           (:id team) (str/lower email)
-                                           (:id profile)
-                                           (name role) expire
-                                           (name role) expire])
-            updated?   (not= id (:id invitation))
-            profile-id (:id profile)
-            tprops     {:profile-id profile-id
-                        :invitation-id (:id invitation)
-                        :valid-until expire
-                        :team-id (:id team)
-                        :member-email (:email-to invitation)
-                        :member-id (:id member)
-                        :role role}
-            itoken     (create-invitation-token cfg tprops)
-            ptoken     (create-profile-identity-token cfg profile-id)]
+      (do
+        (some->> member (teams/check-profile-muted conn))
+        (teams/check-email-bounce conn email true)
+        (teams/check-email-spam conn email true)
 
-        (when (contains? cf/flags :log-invitation-tokens)
-          (l/info :hint "invitation token" :token itoken))
+        (let [id         (uuid/next)
+              expire     (dt/in-future "168h") ;; 7 days
+              invitation (db/exec-one! conn [sql:upsert-team-invitation id
+                                             (:id team) (str/lower email)
+                                             (:id profile)
+                                             (name role) expire
+                                             (name role) expire])
+              updated?   (not= id (:id invitation))
+              profile-id (:id profile)
+              tprops     {:profile-id profile-id
+                          :invitation-id (:id invitation)
+                          :valid-until expire
+                          :team-id (:id team)
+                          :member-email (:email-to invitation)
+                          :member-id (:id member)
+                          :role role}
+              itoken     (create-invitation-token cfg tprops)
+              ptoken     (create-profile-identity-token cfg profile-id)]
 
-        (let [props  (-> (dissoc tprops :profile-id)
-                         (audit/clean-props))
-              evname (if updated?
-                       "update-team-invitation"
-                       "create-team-invitation")
-              event (-> (audit/event-from-rpc-params params)
-                        (assoc ::audit/name evname)
-                        (assoc ::audit/props props))]
-          (audit/submit! cfg event))
+          (when (contains? cf/flags :log-invitation-tokens)
+            (l/info :hint "invitation token" :token itoken))
 
-        (eml/send! {::eml/conn conn
-                    ::eml/factory eml/invite-to-team
-                    :public-uri (cf/get :public-uri)
-                    :to email
-                    :invited-by (:fullname profile)
-                    :team (:name team)
-                    :token itoken
-                    :extra-data ptoken})
+          (let [props  (-> (dissoc tprops :profile-id)
+                           (audit/clean-props))
+                evname (if updated?
+                         "update-team-invitation"
+                         "create-team-invitation")
+                event (-> (audit/event-from-rpc-params params)
+                          (assoc ::audit/name evname)
+                          (assoc ::audit/props props))]
+            (audit/submit! cfg event))
 
-        itoken))))
+          (when (allow-invitation-emails? member)
+            (eml/send! {::eml/conn conn
+                        ::eml/factory eml/invite-to-team
+                        :public-uri (cf/get :public-uri)
+                        :to email
+                        :invited-by (:fullname profile)
+                        :team (:name team)
+                        :token itoken
+                        :extra-data ptoken}))
 
-(defn- add-user-to-team
-  [conn profile team role email]
+          itoken)))))
+
+(defn- add-member-to-team
+  [conn profile team role member]
 
   (let [team-id (:id team)
-        member  (db/get* conn :profile
-                         {:email (str/lower email)}
-                         {::sql/columns [:id :email]})
         params  (merge
                  {:team-id team-id
                   :profile-id (:id member)}
                  (get types.team/permissions-for-role role))]
 
-      ;; Do not allow blocked users to join teams.
+    ;; Do not allow blocked users to join teams.
     (when (:is-blocked member)
       (ex/raise :type :restriction
                 :code :profile-blocked))
@@ -205,29 +203,33 @@
     (eml/send! {::eml/conn conn
                 ::eml/factory eml/join-team
                 :public-uri (cf/get :public-uri)
-                :to email
+                :to (:email member)
                 :invited-by (:fullname profile)
                 :team (:name team)
                 :team-id (:id team)})))
 
-(def sql:valid-requests-email
-  "SELECT p.email
+(def ^:private sql:valid-access-request-profiles
+  "SELECT p.id, p.email, p.is_blocked
      FROM team_access_request AS tr
      JOIN profile AS p ON (tr.requester_id = p.id)
     WHERE tr.team_id = ?
-      AND tr.auto_join_until > now()")
+      AND tr.auto_join_until > now()
+      AND (p.deleted_at IS NULL OR
+           p.deleted_at > now())")
 
-(defn- get-valid-requests-email
+(defn- get-valid-access-request-profiles
   [conn team-id]
-  (db/exec! conn [sql:valid-requests-email team-id]))
+  (db/exec! conn [sql:valid-access-request-profiles team-id]))
 
-(def ^:private xf:map-email
-  (map :email))
+(def ^:private xf:map-email (map :email))
 
 (defn- create-team-invitations
   [{:keys [::db/conn] :as cfg} {:keys [profile team role emails] :as params}]
-  (let [join-requests    (into #{} xf:map-email
-                               (get-valid-requests-email conn (:id team)))
+  (let [emails           (set emails)
+
+        join-requests    (->> (get-valid-access-request-profiles conn (:id team))
+                              (d/index-by :email))
+
         team-members     (into #{} xf:map-email
                                (teams/get-team-members conn (:id team)))
 
@@ -245,8 +247,10 @@
 
     ;; For requested invitations, do not send invitation emails, add
     ;; the user directly to the team
-    (->> (filter join-requests emails)
-         (run! (partial add-user-to-team conn profile team role)))
+    (->> join-requests
+         (filter #(contains? emails (key %)))
+         (map val)
+         (run! (partial add-member-to-team conn profile team role)))
 
     invitations))
 
@@ -404,20 +408,20 @@
 (sv/defmethod ::update-team-invitation-role
   {::doc/added "1.17"
    ::doc/module :teams
-   ::sm/params schema:update-team-invitation-role}
-  [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id team-id email role] :as params}]
-  (db/with-atomic [conn pool]
-    (let [perms (teams/get-permissions conn profile-id team-id)]
+   ::sm/params schema:update-team-invitation-role
+   ::db/transaction true}
+  [{:keys [::db/conn]} {:keys [::rpc/profile-id team-id email role] :as params}]
+  (let [perms (teams/get-permissions conn profile-id team-id)]
 
-      (when-not (:is-admin perms)
-        (ex/raise :type :validation
-                  :code :insufficient-permissions))
+    (when-not (:is-admin perms)
+      (ex/raise :type :validation
+                :code :insufficient-permissions))
 
-      (db/update! conn :team-invitation
-                  {:role (name role) :updated-at (dt/now)}
-                  {:team-id team-id :email-to (profile/clean-email email)})
+    (db/update! conn :team-invitation
+                {:role (name role) :updated-at (dt/now)}
+                {:team-id team-id :email-to (profile/clean-email email)})
 
-      nil)))
+    nil))
 
 ;; --- Mutation: Delete invitation
 
@@ -428,20 +432,20 @@
 
 (sv/defmethod ::delete-team-invitation
   {::doc/added "1.17"
-   ::sm/params schema:delete-team-invition}
-  [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id team-id email] :as params}]
-  (db/with-atomic [conn pool]
-    (let [perms (teams/get-permissions conn profile-id team-id)]
+   ::sm/params schema:delete-team-invition
+   ::db/transaction true}
+  [{:keys [::db/conn]} {:keys [::rpc/profile-id team-id email] :as params}]
+  (let [perms (teams/get-permissions conn profile-id team-id)]
 
-      (when-not (:is-admin perms)
-        (ex/raise :type :validation
-                  :code :insufficient-permissions))
+    (when-not (:is-admin perms)
+      (ex/raise :type :validation
+                :code :insufficient-permissions))
 
-      (let [invitation (db/delete! conn :team-invitation
-                                   {:team-id team-id
-                                    :email-to (profile/clean-email email)}
-                                   {::db/return-keys true})]
-        (rph/wrap nil {::audit/props {:invitation-id (:id invitation)}})))))
+    (let [invitation (db/delete! conn :team-invitation
+                                 {:team-id team-id
+                                  :email-to (profile/clean-email email)}
+                                 {::db/return-keys true})]
+      (rph/wrap nil {::audit/props {:invitation-id (:id invitation)}}))))
 
 
 ;; --- Mutation: Request Team Invitation
@@ -572,5 +576,3 @@
 
       (with-meta {:request request}
         {::audit/props {:request 1}}))))
-
-

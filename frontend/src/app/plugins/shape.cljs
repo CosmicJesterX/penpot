@@ -211,7 +211,7 @@
                   (u/display-not-valid :name value)
 
                   :else
-                  (st/emit! (dwsh/update-shapes [id] #(assoc % :name value))))))}
+                  (st/emit! (dw/end-rename-shape id value)))))}
 
            :blocked
            {:this true
@@ -492,7 +492,9 @@
                   (u/display-not-valid :x "Plugin doesn't have 'content:write' permission")
 
                   :else
-                  (st/emit! (dw/update-position id {:x value})))))}
+                  (st/emit! (dw/update-position id
+                                                {:x value}
+                                                {:absolute? true})))))}
 
            :y
            {:this true
@@ -508,16 +510,19 @@
                   (u/display-not-valid :y "Plugin doesn't have 'content:write' permission")
 
                   :else
-                  (st/emit! (dw/update-position id {:y value})))))}
+                  (st/emit! (dw/update-position id
+                                                {:y value}
+                                                {:absolute? true})))))}
 
            :parent
            {:this true
             ;; not enumerable so there are no infinite loops
             :enumerable false
             :get (fn [self]
-                   (let [shape (u/proxy->shape self)
-                         parent-id (:parent-id shape)]
-                     (shape-proxy plugin-id (obj/get self "$file") (obj/get self "$page") parent-id)))}
+                   (let [shape (u/proxy->shape self)]
+                     (when-not (cfh/root? shape)
+                       (let [parent-id (:parent-id shape)]
+                         (shape-proxy plugin-id (obj/get self "$file") (obj/get self "$page") parent-id)))))}
 
            :parentX
            {:this true
@@ -541,7 +546,9 @@
                       parent-id (-> self u/proxy->shape :parent-id)
                       parent (u/locate-shape (obj/get self "$file") (obj/get self "$page") parent-id)
                       parent-x (:x parent)]
-                  (st/emit! (dw/update-position id {:x (+ parent-x value)})))))}
+                  (st/emit! (dw/update-position id
+                                                {:x (+ parent-x value)}
+                                                {:absolute? true})))))}
 
            :parentY
            {:this true
@@ -566,7 +573,9 @@
                       parent-id (-> self u/proxy->shape :parent-id)
                       parent (u/locate-shape (obj/get self "$file") (obj/get self "$page") parent-id)
                       parent-y (:y parent)]
-                  (st/emit! (dw/update-position id {:y (+ parent-y value)})))))}
+                  (st/emit! (dw/update-position id
+                                                {:y (+ parent-y value)}
+                                                {:absolute? true})))))}
 
            :boardX
            {:this true
@@ -591,7 +600,9 @@
                       frame-id (-> self u/proxy->shape :frame-id)
                       frame (u/locate-shape (obj/get self "$file") (obj/get self "$page") frame-id)
                       frame-x (:x frame)]
-                  (st/emit! (dw/update-position id {:x (+ frame-x value)})))))}
+                  (st/emit! (dw/update-position id
+                                                {:x (+ frame-x value)}
+                                                {:absolute? true})))))}
 
            :boardY
            {:this true
@@ -616,7 +627,9 @@
                       frame-id (-> self u/proxy->shape :frame-id)
                       frame (u/locate-shape (obj/get self "$file") (obj/get self "$page") frame-id)
                       frame-y (:y frame)]
-                  (st/emit! (dw/update-position id {:y (+ frame-y value)})))))}
+                  (st/emit! (dw/update-position id
+                                                {:y (+ frame-y value)}
+                                                {:absolute? true})))))}
 
            :width
            {:this true
@@ -953,7 +966,7 @@
 
                  :else
                  (do (st/emit! (dwsl/create-layout-from-id id :flex :from-frame? true :calculate-params? false))
-                     (grid/grid-layout-proxy plugin-id file-id page-id id)))))
+                     (flex/flex-layout-proxy plugin-id file-id page-id id)))))
 
            :addGridLayout
            (fn []

@@ -112,7 +112,7 @@
         text-modifiers    (mf/deref refs/workspace-text-modifier)
 
         objects-modified  (mf/with-memo [base-objects text-modifiers modifiers]
-                            (binding [cts/*wasm-sync* true]
+                            (binding [cts/*wasm-sync* false]
                               (apply-modifiers-to-selected selected base-objects text-modifiers modifiers)))
 
         selected-shapes   (keep (d/getf objects-modified) selected)
@@ -132,6 +132,7 @@
         frame-hover       (mf/use-state nil)
         active-frames     (mf/use-state #{})
         canvas-init?      (mf/use-state false)
+        initialized?      (mf/use-state false)
 
         ;; REFS
         [viewport-ref
@@ -292,23 +293,24 @@
         (wasm.api/resize-viewbox (:width vport) (:height vport))))
 
     (mf/with-effect [@canvas-init?  base-objects]
-      (when @canvas-init?
+      (when (and @canvas-init? @initialized?)
         (wasm.api/set-objects base-objects)))
 
     (mf/with-effect [@canvas-init? preview-blend]
       (when (and @canvas-init? preview-blend)
         (wasm.api/request-render "with-effect")))
 
-    (mf/with-effect [@canvas-init? vbox]
-      (when @canvas-init?
-        (wasm.api/set-view-zoom zoom vbox)))
+    (mf/with-effect [@canvas-init? zoom vbox background]
+      (when (and @canvas-init? (not @initialized?))
+        (wasm.api/initialize base-objects zoom vbox background)
+        (reset! initialized? true)))
 
-    (mf/with-effect [@canvas-init? vbox]
-      (when @canvas-init?
+    (mf/with-effect [vbox zoom]
+      (when (and @canvas-init? initialized?)
         (wasm.api/set-view-box zoom vbox)))
 
-    (mf/with-effect [@canvas-init? background]
-      (when @canvas-init?
+    (mf/with-effect [background]
+      (when (and @canvas-init? initialized?)
         (wasm.api/set-canvas-background background)))
 
     (hooks/setup-dom-events zoom disable-paste in-viewport? read-only? drawing-tool drawing-path?)
@@ -343,8 +345,7 @@
         [:> comments/comments-layer* {:vbox vbox
                                       :page-id page-id
                                       :vport vport
-                                      :zoom zoom
-                                      :drawing drawing}])
+                                      :zoom zoom}])
 
       (when picking-color?
         [:& pixel-overlay/pixel-overlay {:vport vport
@@ -485,7 +486,7 @@
            :shift? @shift?}])
 
        [:& widgets/frame-titles
-        {:objects base-objects
+        {:objects (with-meta objects-modified nil)
          :selected selected
          :zoom zoom
          :show-artboard-names? show-artboard-names?

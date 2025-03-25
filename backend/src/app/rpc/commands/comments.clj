@@ -38,6 +38,8 @@
 (def r-mentions-split #"@\[[^\]]*\]\([^\)]*\)")
 (def r-mentions #"@\[([^\]]*)\]\(([^\)]*)\)")
 
+(def comment-max-length 750)
+
 (defn- format-comment
   [{:keys [content]}]
   (->> (d/interleave-all
@@ -442,7 +444,7 @@
   [:map {:title "create-comment-thread"}
    [:file-id ::sm/uuid]
    [:position ::gpt/point]
-   [:content [:string {:max 750}]]
+   [:content [:string {:max comment-max-length}]]
    [:page-id ::sm/uuid]
    [:frame-id ::sm/uuid]
    [:share-id {:optional true} [:maybe ::sm/uuid]]
@@ -585,7 +587,7 @@
   schema:create-comment
   [:map {:title "create-comment"}
    [:thread-id ::sm/uuid]
-   [:content [:string {:max 250}]]
+   [:content [:string {:max comment-max-length}]]
    [:share-id {:optional true} [:maybe ::sm/uuid]]
    [:mentions {:optional true} [::sm/set ::sm/uuid]]])
 
@@ -621,6 +623,7 @@
 
           comment (-> (db/insert! conn :comment params)
                       (decode-row)
+                      (assoc :file-id file-id)
                       (add-owner profile))]
 
       ;; Update thread modified-at attribute and assoc the current
@@ -654,7 +657,7 @@
   schema:update-comment
   [:map {:title "update-comment"}
    [:id ::sm/uuid]
-   [:content [:string {:max 250}]]
+   [:content [:string {:max comment-max-length}]]
    [:share-id {:optional true} [:maybe ::sm/uuid]]
    [:mentions {:optional true} [::sm/set ::sm/uuid]]])
 
@@ -794,3 +797,18 @@
                 {:id id}
                 {::db/return-keys false})
     nil))
+
+(def ^:private
+  schema:mark-all-threads-as-read
+  [:map {:title "mark-all-threads-as-read"}
+   [:threads [:vector ::sm/uuid]]])
+
+(sv/defmethod ::mark-all-threads-as-read
+  {::doc/added "1.15"
+   ::sm/params schema:mark-all-threads-as-read}
+  [cfg {:keys [::rpc/profile-id threads] :as params}]
+  (db/tx-run!
+   cfg
+   (fn [{:keys [::db/conn]}]
+     (doseq [thread-id threads]
+       (upsert-comment-thread-status! conn profile-id thread-id)))))

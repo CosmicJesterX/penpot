@@ -248,11 +248,12 @@
   [[h s brightness]]
   (if (= s 0)
     [brightness brightness brightness]
-    (let [sextant   (int (mth/floor (/ h 60)))
-          remainder (- (/ h 60) sextant)
-          val1      (int (* brightness (- 1 s)))
-          val2      (int (* brightness (- 1 (* s remainder))))
-          val3      (int (* brightness (- 1 (* s (- 1 remainder)))))]
+    (let [sextant    (int (mth/floor (/ h 60)))
+          remainder  (- (/ h 60) sextant)
+          brightness (d/nilv brightness 0)
+          val1       (int (* brightness (- 1 s)))
+          val2       (int (* brightness (- 1 (* s remainder))))
+          val3       (int (* brightness (- 1 (* s (- 1 remainder)))))]
       (case sextant
         1 [val2 brightness val1]
         2 [val1 brightness val3]
@@ -341,13 +342,20 @@
   (-> (hex->hsl data)
       (conj opacity)))
 
-#?(:cljs
-   (defn format-hsla
-     [[h s l a]]
-     (let [precision 2
-           rounded-s (* 100 (parse-double (d/format-precision s precision)))
-           rounded-l (* 100 (parse-double (d/format-precision l precision)))]
-       (str/concat "" h ", " rounded-s "%, " rounded-l "%, " a))))
+(defn format-hsla
+  [[h s l a]]
+  (let [precision 2
+        rounded-h (int h)
+        rounded-s (d/format-number (* 100 s) precision)
+        rounded-l (d/format-number (* 100 l) precision)
+        rounded-a (d/format-number a precision)]
+    (str/concat "" rounded-h ", " rounded-s "%, " rounded-l "%, " rounded-a)))
+
+(defn format-rgba
+  [[r g b a]]
+  (let [precision 2
+        rounded-a (d/format-number a precision)]
+    (str/ffmt "%, %, %, %" r g b rounded-a)))
 
 (defn- hue->rgb
   "Helper for hsl->rgb"

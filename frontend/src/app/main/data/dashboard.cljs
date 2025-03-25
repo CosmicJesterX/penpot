@@ -16,6 +16,7 @@
    [app.main.data.common :as dcm]
    [app.main.data.event :as ev]
    [app.main.data.fonts :as df]
+   [app.main.data.helpers :as dsh]
    [app.main.data.modal :as modal]
    [app.main.data.websocket :as dws]
    [app.main.features :as features]
@@ -25,6 +26,7 @@
    [app.util.time :as dt]
    [beicon.v2.core :as rx]
    [clojure.set :as set]
+   [cuerdas.core :as str]
    [potok.v2.core :as ptk]))
 
 (log/set-level! :warn)
@@ -37,7 +39,9 @@
 (declare process-message)
 
 (defn initialize
-  []
+  [team-id]
+  (assert (uuid? team-id) "expected uuid instance for `team-id`")
+
   (ptk/reify ::initialize
     ptk/WatchEvent
     (watch [_ state stream]
@@ -45,8 +49,8 @@
             profile-id (:profile-id state)]
 
         (->> (rx/merge
-              (rx/of (fetch-projects)
-                     (df/fetch-fonts))
+              (rx/of (fetch-projects team-id)
+                     (df/fetch-fonts team-id))
               (->> stream
                    (rx/filter (ptk/type? ::dws/message))
                    (rx/map deref)
@@ -59,8 +63,8 @@
              (rx/take-until stopper))))))
 
 (defn finalize
-  []
-  (ptk/data-event ::finalize {}))
+  [team-id]
+  (ptk/data-event ::finalize {:team-id team-id}))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Data Fetching (context aware: current team)
@@ -68,7 +72,7 @@
 
 ;; --- EVENT: fetch-projects
 
-(defn projects-fetched
+(defn- projects-fetched
   [projects]
   (ptk/reify ::projects-fetched
     ptk/UpdateEvent
@@ -79,13 +83,12 @@
               projects))))
 
 (defn fetch-projects
-  []
+  [team-id]
   (ptk/reify ::fetch-projects
     ptk/WatchEvent
-    (watch [_ state _]
-      (let [team-id (:current-team-id state)]
-        (->> (rp/cmd! :get-projects {:team-id team-id})
-             (rx/map projects-fetched))))))
+    (watch [_ _ _]
+      (->> (rp/cmd! :get-projects {:team-id team-id})
+           (rx/map projects-fetched)))))
 
 ;; --- EVENT: search
 
@@ -114,7 +117,7 @@
 
 ;; --- EVENT: recent-files
 
-(defn recent-files-fetched
+(defn- recent-files-fetched
   [files]
   (ptk/reify ::recent-files-fetched
     ptk/UpdateEvent
@@ -125,13 +128,14 @@
             (update :files d/merge files))))))
 
 (defn fetch-recent-files
-  []
-  (ptk/reify ::fetch-recent-files
-    ptk/WatchEvent
-    (watch [_ state _]
-      (let [team-id (:current-team-id state)]
-        (->> (rp/cmd! :get-team-recent-files {:team-id team-id})
-             (rx/map recent-files-fetched))))))
+  ([] (fetch-recent-files nil))
+  ([team-id]
+   (ptk/reify ::fetch-recent-files
+     ptk/WatchEvent
+     (watch [_ state _]
+       (when-let [team-id (or team-id (:current-team-id state))]
+         (->> (rp/cmd! :get-team-recent-files {:team-id team-id})
+              (rx/map recent-files-fetched)))))))
 
 ;; --- EVENT: fetch-template-files
 
@@ -186,8 +190,8 @@
   (ptk/reify ::show-file-menu-with-position
     ptk/UpdateEvent
     (update [_ state]
-      (update state :dashboard-local
-              assoc :menu-open true
+      (update state :dashboard-local assoc
+              :menu-open true
               :menu-pos pos
               :file-id file-id))))
 
@@ -247,15 +251,18 @@
   (ptk/reify ::create-project
     ptk/WatchEvent
     (watch [_ state _]
-      (let [projects (get state :projects)
-            unames   (cfh/get-used-names projects)
-            name     (cfh/generate-unique-name unames (str (tr "dashboard.new-project-prefix") " 1"))
-            team-id  (:current-team-id state)
-            params   {:name name
-                      :team-id team-id}
+      (let [team-id   (:current-team-id state)
+            projects  (dsh/lookup-team-projects state team-id)
+            unames    (cfh/get-used-names projects)
+            base-name (tr "dashboard.new-project-prefix")
+            name      (cfh/generate-unique-name base-name unames :immediate-suffix? true)
+            team-id   (:current-team-id state)
+            params    {:name name
+                       :team-id team-id}
             {:keys [on-success on-error]
              :or {on-success identity
-                  on-error rx/throw}} (meta params)]
+                  on-error rx/throw}}
+            (meta params)]
         (->> (rp/cmd! :create-project params)
              (rx/tap on-success)
              (rx/map project-created)
@@ -280,13 +287,18 @@
        :name name})
 
     ptk/WatchEvent
-    (watch [_ _ _]
+    (watch [_ state _]
       (let [{:keys [on-success on-error]
              :or {on-success identity
                   on-error rx/throw}} (meta params)
-
-            new-name (str name " " (tr "dashboard.copy-suffix"))]
-
+            projects (get state :projects)
+            unames (cfh/get-used-names projects)
+            suffix-fn (fn [copy-count]
+                        (str/concat " "
+                                    (tr "dashboard.copy-suffix")
+                                    (when (> copy-count 1)
+                                      (str " " copy-count))))
+            new-name (cfh/generate-unique-name name unames :suffix-fn suffix-fn)]
         (->> (rp/cmd! :duplicate-project {:project-id id :name new-name})
              (rx/tap on-success)
              (rx/map project-duplicated)
@@ -459,14 +471,16 @@
 
     ptk/UpdateEvent
     (update [_ state]
-      (-> state
-          (assoc-in [:files id] file)
-          (assoc-in [:recent-files id] file)
-          (update-in [:projects project-id :count] inc)))))
+      (let [file (dissoc file :data)]
+        (-> state
+            (assoc-in [:files id] file)
+            (assoc-in [:recent-files id] file)
+            (update-in [:projects project-id :count] inc))))))
 
 (defn create-file
   [{:keys [project-id name] :as params}]
   (dm/assert! (uuid? project-id))
+
   (ptk/reify ::create-file
     ev/Event
     (-data [_] {:project-id project-id})
@@ -475,16 +489,19 @@
     (watch [it state _]
       (let [{:keys [on-success on-error]
              :or {on-success identity
-                  on-error rx/throw}} (meta params)
+                  on-error rx/throw}}
+            (meta params)
 
-            files    (get state :files)
-            unames   (cfh/get-used-names files)
-            name     (or name (cfh/generate-unique-name unames (str (tr "dashboard.new-file-prefix") " 1")))
-            features (-> (features/get-team-enabled-features state)
-                         (set/difference cfeat/frontend-only-features))
-            params   (-> params
-                         (assoc :name name)
-                         (assoc :features features))]
+            files     (dsh/lookup-team-files state)
+            unames    (cfh/get-used-names files)
+            base-name (tr "dashboard.new-file-prefix")
+            name      (or name
+                          (cfh/generate-unique-name base-name unames :immediate-suffix? true))
+            features  (-> (features/get-team-enabled-features state)
+                          (set/difference cfeat/frontend-only-features))
+            params    (-> params
+                          (assoc :name name)
+                          (assoc :features features))]
 
         (->> (rp/cmd! :create-file params)
              (rx/tap on-success)
@@ -499,13 +516,17 @@
   (dm/assert! (string? name))
   (ptk/reify ::duplicate-file
     ptk/WatchEvent
-    (watch [_ _ _]
+    (watch [_ state _]
       (let [{:keys [on-success on-error]
              :or {on-success identity
                   on-error rx/throw}} (meta params)
-
-            new-name (str name " " (tr "dashboard.copy-suffix"))]
-
+            unames (cfh/get-used-names (get state :files))
+            suffix-fn (fn [copy-count]
+                        (str/concat " "
+                                    (tr "dashboard.copy-suffix")
+                                    (when (> copy-count 1)
+                                      (str " " copy-count))))
+            new-name (cfh/generate-unique-name name unames :suffix-fn suffix-fn)]
         (->> (rp/cmd! :duplicate-file {:file-id id :name new-name})
              (rx/tap on-success)
              (rx/map file-created)
@@ -515,11 +536,8 @@
 
 (defn move-files
   [{:keys [ids project-id] :as params}]
-  (dm/assert! (uuid? project-id))
-
-  (dm/assert!
-   "expected a valid set of uuids"
-   (sm/check-set-of-uuid! ids))
+  (assert (uuid? project-id))
+  (assert (sm/check-set-of-uuid ids))
 
   (ptk/reify ::move-files
     ev/Event
@@ -586,12 +604,12 @@
             pparams       (:path-params route)
             in-project?   (contains? pparams :project-id)
             name          (if in-project?
-                            (let [files  (get state :files)
+                            (let [files  (dsh/lookup-team-files state team-id)
                                   unames (cfh/get-used-names files)]
-                              (cfh/generate-unique-name unames (str (tr "dashboard.new-file-prefix") " 1")))
-                            (let [projects (get state :projects)
+                              (cfh/generate-unique-name (tr "dashboard.new-file-prefix") unames :immediate-suffix? true))
+                            (let [projects (dsh/lookup-team-projects  state team-id)
                                   unames   (cfh/get-used-names projects)]
-                              (cfh/generate-unique-name unames (str (tr "dashboard.new-project-prefix") " 1"))))
+                              (cfh/generate-unique-name (tr "dashboard.new-project-prefix") unames :immediate-suffix? true)))
             params        (if in-project?
                             {:project-id (:project-id pparams)
                              :name name}

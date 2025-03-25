@@ -46,7 +46,7 @@
 
 .focused {
   --combobox-outline-color: var(--color-accent-primary);
-  --combobox-bg-color: var(--color-background-secondary);
+  --combobox-bg-color: var(--color-background-primary);
 }
 
 .arrow {
@@ -70,6 +70,11 @@
   inline-size: 100%;
   padding-inline-start: var(--sp-xxs);
   color: var(--combobox-fg-color);
+
+  &::placeholder {
+    color: var(--input-placeholder-color);
+    text-overflow: ellipsis;
+  }
 }
 
 .header-icon {

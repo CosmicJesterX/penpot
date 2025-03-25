@@ -22,6 +22,7 @@
    [app.db :as db]
    [app.db.sql :as-alias sql]
    [app.features.fdata :as feat.fdata]
+   [app.features.file-migrations :as feat.fmigr]
    [app.loggers.audit :as-alias audit]
    [app.loggers.webhooks :as-alias webhooks]
    [app.rpc :as-alias rpc]
@@ -243,7 +244,8 @@
       (when (contains? (:features file) "fdata/pointer-map")
         (feat.fdata/persist-pointers! cfg id))
 
-      file)))
+      (feat.fmigr/upsert-migrations! conn file)
+      (feat.fmigr/resolve-applied-migrations cfg file))))
 
 (defn get-file
   [{:keys [::db/conn ::wrk/executor] :as cfg} id
@@ -264,6 +266,7 @@
                             {::db/check-deleted (not include-deleted?)
                              ::db/remove-deleted (not include-deleted?)
                              ::sql/for-update lock-for-update?})
+                    (feat.fmigr/resolve-applied-migrations cfg)
                     (feat.fdata/resolve-file-data cfg))
 
         ;; NOTE: we perform the file decoding in a separate thread
@@ -320,6 +323,7 @@
 
           file (-> (get-file cfg id :project-id project-id)
                    (assoc :permissions perms)
+                   (assoc :team-id (:id team))
                    (check-version!))]
 
       (-> (cfeat/get-team-enabled-features cf/flags team)
@@ -381,8 +385,10 @@
           f.revn,
           f.vern,
           f.is_shared,
-          ft.media_id AS thumbnail_id
+          ft.media_id AS thumbnail_id,
+          p.team_id
      from file as f
+     inner join project as p on (p.id = f.project_id)
      left join file_thumbnail as ft on (ft.file_id = f.id
                                         and ft.revn = f.revn
                                         and ft.deleted_at is null)
@@ -536,7 +542,8 @@
           f.modified_at,
           f.name,
           f.is_shared,
-          ft.media_id
+          ft.media_id,
+          p.team_id
      from file as f
     inner join project as p on (p.id = f.project_id)
      left join file_thumbnail as ft on (ft.file_id = f.id and ft.revn = f.revn and ft.deleted_at is null)
@@ -545,7 +552,6 @@
       and p.deleted_at is null
       and p.team_id = ?
     order by f.modified_at desc")
-
 
 (defn- get-library-summary
   [cfg {:keys [id data] :as file}]
@@ -608,6 +614,7 @@
    SELECT l.id,
           l.features,
           l.project_id,
+          p.team_id,
           l.created_at,
           l.modified_at,
           l.deleted_at,
@@ -617,6 +624,7 @@
           l.synced_at,
           l.is_shared
      FROM libs AS l
+    INNER JOIN project AS p ON (p.id = l.project_id)
     WHERE l.deleted_at IS NULL OR l.deleted_at > now();")
 
 (defn get-file-libraries
@@ -683,7 +691,8 @@
             f.name,
             f.is_shared,
             ft.media_id AS thumbnail_id,
-            row_number() over w as row_num
+            row_number() over w as row_num,
+            p.team_id
        from file as f
       inner join project as p on (p.id = f.project_id)
        left join file_thumbnail as ft on (ft.file_id = f.id
@@ -797,17 +806,17 @@
     [:id ::sm/uuid]
     [:name [:string {:max 250}]]
     [:created-at ::dt/instant]
-    [:modified-at ::dt/instant]]}
+    [:modified-at ::dt/instant]]
 
-  [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id id] :as params}]
-  (db/with-atomic [conn pool]
-    (check-edition-permissions! conn profile-id id)
-    (let [file (rename-file conn params)]
-      (rph/with-meta
-        (select-keys file [:id :name :created-at :modified-at])
-        {::audit/props {:project-id (:project-id file)
-                        :created-at (:created-at file)
-                        :modified-at (:modified-at file)}}))))
+   ::db/transaction true}
+  [{:keys [::db/conn] :as cfg} {:keys [::rpc/profile-id id] :as params}]
+  (check-edition-permissions! conn profile-id id)
+  (let [file (rename-file conn params)]
+    (rph/with-meta
+      (select-keys file [:id :name :created-at :modified-at])
+      {::audit/props {:project-id (:project-id file)
+                      :created-at (:created-at file)
+                      :modified-at (:modified-at file)}})))
 
 ;; --- MUTATION COMMAND: set-file-shared
 
@@ -999,15 +1008,17 @@
   {::doc/added "1.17"
    ::webhooks/event? true
    ::sm/params schema:link-file-to-library}
-  [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id file-id library-id] :as params}]
+  [cfg {:keys [::rpc/profile-id file-id library-id] :as params}]
   (when (= file-id library-id)
     (ex/raise :type :validation
               :code :invalid-library
               :hint "A file cannot be linked to itself"))
-  (db/with-atomic [conn pool]
-    (check-edition-permissions! conn profile-id file-id)
-    (check-edition-permissions! conn profile-id library-id)
-    (link-file-to-library conn params)))
+
+  (db/tx-run! cfg
+              (fn [{:keys [::db/conn]}]
+                (check-edition-permissions! conn profile-id file-id)
+                (check-edition-permissions! conn profile-id library-id)
+                (link-file-to-library conn params))))
 
 ;; --- MUTATION COMMAND: unlink-file-from-library
 
@@ -1025,12 +1036,12 @@
 (sv/defmethod ::unlink-file-from-library
   {::doc/added "1.17"
    ::webhooks/event? true
-   ::sm/params schema:unlink-file-to-library}
-  [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id file-id] :as params}]
-  (db/with-atomic [conn pool]
-    (check-edition-permissions! conn profile-id file-id)
-    (unlink-file-from-library conn params)
-    nil))
+   ::sm/params schema:unlink-file-to-library
+   ::db/transaction true}
+  [{:keys [::db/conn] :as cfg} {:keys [::rpc/profile-id file-id] :as params}]
+  (check-edition-permissions! conn profile-id file-id)
+  (unlink-file-from-library conn params)
+  nil)
 
 ;; --- MUTATION COMMAND: update-sync
 
@@ -1050,12 +1061,11 @@
 (sv/defmethod ::update-file-library-sync-status
   "Update the synchronization status of a file->library link"
   {::doc/added "1.17"
-   ::sm/params schema:update-file-library-sync-status}
-  [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id file-id] :as params}]
-  (db/with-atomic [conn pool]
-    (check-edition-permissions! conn profile-id file-id)
-    (update-sync conn params)))
-
+   ::sm/params schema:update-file-library-sync-status
+   ::db/transaction true}
+  [{:keys [::db/conn]} {:keys [::rpc/profile-id file-id] :as params}]
+  (check-edition-permissions! conn profile-id file-id)
+  (update-sync conn params))
 
 ;; --- MUTATION COMMAND: ignore-sync
 
@@ -1076,9 +1086,9 @@
 (sv/defmethod ::ignore-file-library-sync-status
   "Ignore updates in linked files"
   {::doc/added "1.17"
-   ::sm/params schema:ignore-file-library-sync-status}
-  [{:keys [::db/pool] :as cfg} {:keys [::rpc/profile-id file-id] :as params}]
-  (db/with-atomic [conn pool]
-    (check-edition-permissions! conn profile-id file-id)
-    (->  (ignore-sync conn params)
-         (update :features db/decode-pgarray #{}))))
+   ::sm/params schema:ignore-file-library-sync-status
+   ::db/transaction true}
+  [{:keys [::db/conn]} {:keys [::rpc/profile-id file-id] :as params}]
+  (check-edition-permissions! conn profile-id file-id)
+  (->  (ignore-sync conn params)
+       (update :features db/decode-pgarray #{})))

@@ -48,6 +48,7 @@
     :$file {:enumerable false :get (constantly file-id)}
 
     :id {:get (fn [] (dm/str id))}
+    :fileId {:get #(dm/str file-id)}
 
     :name
     {:this true
@@ -640,7 +641,7 @@
          :else
          (let [component (u/proxy->library-component self)
                value (dm/str (d/nilv (:path component) "") " / " value)]
-           (st/emit! (dwl/rename-component id value)))))}
+           (st/emit! (dwl/rename-component-and-main-instance id value)))))}
 
     :path
     {:this true

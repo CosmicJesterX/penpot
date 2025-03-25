@@ -44,11 +44,11 @@ This is an incomplete list of devenv related subcommands found on
 manage.sh script:
 
 ```bash
-./manage.sh build-devenv # builds the devenv docker image (called by run-devenv automatically when needed)
-./manage.sh start-devenv # starts background running containers
-./manage.sh run-devenv   # enters to new tmux session inside of one of the running containers
-./manage.sh stop-devenv  # stops background running containers
-./manage.sh drop-devenv  # removes all the containers, volumes and networks used by the devenv
+./manage.sh build-devenv-local # builds the local devenv docker image (called by run-devenv automatically when needed)
+./manage.sh start-devenv       # starts background running containers
+./manage.sh run-devenv         # enters to new tmux session inside of one of the running containers
+./manage.sh stop-devenv        # stops background running containers
+./manage.sh drop-devenv        # removes all the containers, volumes and networks used by the devenv
 ```
 
 Having the container running and tmux opened inside the container,
@@ -65,13 +65,14 @@ connect to penpot by browsing to http://localhost:3449 .
 
 <!-- ## Inside the tmux session -->
 
-<!-- By default, the tmux session opens 4 windows: -->
+<!-- By default, the tmux session opens 5 windows: -->
 
 <!-- - **gulp** (0): responsible of build, watch (and other related) of -->
 <!--   styles, images, fonts and templates. -->
 <!-- - **frontend** (1): responsible of cljs compilation process of frontend. -->
-<!-- - **exporter** (2): responsible of cljs compilation process of exporter. -->
-<!-- - **backend** (3): responsible of starting the backend jvm process. -->
+<!--   **storybook** (2): local storybook development server -->
+<!-- - **exporter** (3): responsible of cljs compilation process of exporter. -->
+<!-- - **backend** (4): responsible of starting the backend jvm process. -->
 
 
 ### Frontend
@@ -91,9 +92,21 @@ and execute this:
 npx shadow-cljs cljs-repl main
 ```
 
+### Storybook
+
+The storybook local server is started on tmux **window 2** and will listen
+for changes in the styles, components or stories defined in the folders 
+under the design system namespace: `app.main.ui.ds`.
+
+You can open the broser on http://localhost:6006/ to see it.
+
+For more information about storybook check:
+
+https://help.penpot.app/technical-guide/developer/ui/#storybook
+
 ### Exporter
 
-The exporter build process is located in the **window 2** and in the
+The exporter build process is located in the **window 3** and in the
 same way as frontend application, it is built and watched using
 **shadow-cljs**.
 
@@ -114,8 +127,8 @@ This process does not start automatically.
 
 ### Backend
 
-The backend related process is located in the tmux **window 3**, and
-you can go directly to it using <code class="language-bash">ctrl+b 3</code> shortcut.
+The backend related process is located in the tmux **window 4**, and
+you can go directly to it using <code class="language-bash">ctrl+b 4</code> shortcut.
 
 By default the backend will be started in a non-interactive mode for convenience
 but you can press <code class="language-bash">Ctrl+c</code> to exit and execute the following to start the repl:
@@ -144,3 +157,11 @@ similar to a webmail client. Simply navigate to:
 
 [http://localhost:1080](http://localhost:1080)
 
+## Team Feature Flags
+
+To test a Feature Flag, you can enable or disable them by team through the `dbg` page:
+
+1. Create a new team or navigate to an existing team in Penpot.
+2. Copy the `team-id` from the URL (e.g., `?team-id=1234bd95-69dd-805c-8005-c015415436ae`). If no team is selected, the default profile team will be used.
+3. Go to [http://localhost:3449/dbg](http://localhost:3449/dbg).
+4. Open the Feature Flag panel, enter the `team-id` and the `feature` name in either the enable or disable section, and click `Submit`.

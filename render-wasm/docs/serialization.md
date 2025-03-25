@@ -1,5 +1,48 @@
 # Serialization
 
+## Shape Type
+
+Shape types are serialized as `u8`:
+
+| Value | Field  |
+| ----- | ------ |
+| 0     | Frame  |
+| 1     | Group  |
+| 2     | Bool   |
+| 3     | Rect   |
+| 4     | Path   |
+| 5     | Text   |
+| 6     | Circle |
+| 7     | SvgRaw |
+| 8     | Image  |
+| \_    | Rect   |
+
+## Horizontal Constraint
+
+Horizontal constraints are serialized as `u8`:
+
+| Value | Field     |
+| ----- | --------- |
+| 0     | Left      |
+| 1     | Right     |
+| 2     | LeftRight |
+| 3     | Center    |
+| 4     | Scale     |
+| \_    | None      |
+
+## Vertical Constraint
+
+Vertical constraints are serialized as `u8`:
+
+| Value | Field     |
+| ----- | --------- |
+| 0     | Top       |
+| 1     | Bottom    |
+| 2     | TopBottom |
+| 3     | Center    |
+| 4     | Scale     |
+| \_    | None      |
+
 ## Paths
 
 Paths are made of segments of **28 bytes** each. The layout (assuming positions in a `Uint8Array`) is the following:
@@ -82,7 +125,112 @@ Bool operations (`bool-type`) are serialized as `u8`:
 
 Blur types are serialized as `u8`:
 
+| Value | Field |
+| ----- | ----- |
+| 1     | Layer |
+| \_    | None  |
+
+## Shadow Styles
+
+Shadow styles are serialized as `u8`:
+
 | Value | Field        |
 | ----- | ------------ |
-| 1     | Layer        |
-| \_    | None         |
+| 0     | Drop Shadow  |
+| 1     | Inner Shadow |
+| \_    | Drop Shadow  |
+
+## Layout
+
+### Direction
+
+| Value | Field         |
+| ----- | ------------- |
+| 0     | Row           |
+| 1     | RowReverse    |
+| 2     | Column        |
+| 3     | ColumnReverse |
+| \_    | error         |
+
+### Align Items
+
+| Value | Field   |
+| ----- | ------- |
+| 0     | Start   |
+| 1     | End     |
+| 2     | Center  |
+| 3     | Stretch |
+| \_    | error   |
+
+### Align self
+
+| Value | Field   |
+| ----- | ------- |
+| 0     | Start   |
+| 1     | End     |
+| 2     | Center  |
+| 3     | Stretch |
+| \_    | error   |
+
+### Align Content
+
+| Value | Field         |
+| ----- | ------------- |
+| 0     | Start         |
+| 1     | End           |
+| 2     | Center        |
+| 3     | Space between |
+| 4     | Space around  |
+| 5     | Space evenly  |
+| 6     | Stretch       |
+| \_    | error         |
+
+### Justify items
+
+| Value | Field   |
+| ----- | ------- |
+| 0     | Start   |
+| 1     | End     |
+| 2     | Center  |
+| 3     | Stretch |
+| \_    | error   |
+
+### Justify content
+
+| Value | Field         |
+| ----- | ------------- |
+| 0     | Start         |
+| 1     | End           |
+| 2     | Center        |
+| 3     | Space between |
+| 4     | Space around  |
+| 5     | Space evenly  |
+| 6     | Stretch       |
+| \_    | error         |
+
+### Wrap type
+
+| Value | Field   |
+| ----- | ------- |
+| 0     | Wrap    |
+| 1     | No Wrap |
+| \_    | error   |
+
+### Sizing
+
+| Value | Field |
+| ----- | ----- |
+| 0     | Fill  |
+| 1     | Fix   |
+| 2     | Auto  |
+| \_    | error |
+
+## Font
+
+### Style
+
+| Value | Variant |
+| ----- | ------- |
+| 0     | Normal  |
+| 1     | Italic  |
+| \_    | Normal  |

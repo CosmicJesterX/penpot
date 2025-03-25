@@ -17,6 +17,7 @@
    [app.main.data.comments :as dcm]
    [app.main.data.modal :as modal]
    [app.main.data.workspace.comments :as dwcm]
+   [app.main.data.workspace.zoom :as dwz]
    [app.main.refs :as refs]
    [app.main.store :as st]
    [app.main.ui.components.dropdown :refer [dropdown]]
@@ -43,6 +44,7 @@
 (def mentions-context (mf/create-context nil))
 (def r-mentions-split #"@\[[^\]]*\]\([^\)]*\)")
 (def r-mentions #"@\[([^\]]*)\]\(([^\)]*)\)")
+(def zero-width-space \u200B)
 
 (defn- parse-comment
   "Parse a comment into its elements (texts and mentions)"
@@ -78,7 +80,7 @@
   ([text]
    (-> (dom/create-element "span")
        (dom/set-data! "type" "text")
-       (dom/set-html! (if (empty? text) "&#8203;" text)))))
+       (dom/set-html! (if (empty? text) zero-width-space text)))))
 
 (defn- create-mention-node
   "Creates a mention node"
@@ -89,22 +91,29 @@
       (dom/set-data! "fullname" fullname)
       (obj/set! "textContent" fullname)))
 
+(defn- current-text-node*
+  "Retrieves the text node and the offset that the cursor is positioned on"
+  [node anchor-node]
+  (when (.contains node anchor-node)
+    (let [span-node (if (instance? js/Text anchor-node)
+                      (dom/get-parent anchor-node)
+                      anchor-node)
+          container (dom/get-parent span-node)]
+      (when (= node container)
+        span-node))))
+
 (defn- current-text-node
   "Retrieves the text node and the offset that the cursor is positioned on"
   [node]
+  (assert (some? node) "expected valid node")
 
-  (let [selection     (wapi/get-selection)
-        range         (wapi/get-range selection 0)
-        anchor-node   (wapi/range-start-container range)
-        anchor-offset (wapi/range-start-offset range)]
-    (when (and node (.contains node anchor-node))
-      (let [span-node
-            (if (instance? js/Text anchor-node)
-              (dom/get-parent anchor-node)
-              anchor-node)
-            container   (dom/get-parent span-node)]
-        (when (= node container)
-          [span-node anchor-offset])))))
+  (when-let [selection (wapi/get-selection)]
+    (let [range       (wapi/get-range selection 0)
+          anchor-node (wapi/range-start-container range)
+          offset      (wapi/range-start-offset range)
+          span-node   (current-text-node* node anchor-node)]
+      (when span-node
+        [span-node offset]))))
 
 (defn- absolute-offset
   [node child offset]
@@ -121,6 +130,14 @@
   (->> (d/with-prev (dom/get-children parent))
        (d/seek (fn [[it _]] (= node it)))
        (second)))
+
+(defn- blank-content?
+  [content]
+  (let [content (str/trim content)]
+    (or (str/blank? content)
+        (str/empty? content)
+        (and (= (count content) 1)
+             (= (first content) zero-width-space)))))
 
 ;; Component that renders the component content
 (mf/defc comment-content*
@@ -139,7 +156,7 @@
 ;; Input text for comments with mentions
 (mf/defc comment-input*
   {::mf/private true}
-  [{:keys [value placeholder max-length autofocus on-focus on-blur on-change on-esc on-ctrl-enter]}]
+  [{:keys [value placeholder autofocus on-focus on-blur on-change on-esc on-ctrl-enter]}]
 
   (let [value          (d/nilv value "")
         prev-value     (h/use-previous value)
@@ -148,7 +165,8 @@
         mentions-s     (mf/use-ctx mentions-context)
         cur-mention    (mf/use-var nil)
 
-        prev-selection (mf/use-var nil)
+        prev-selection-ref
+        (mf/use-ref)
 
         init-input
         (mf/use-fn
@@ -176,7 +194,7 @@
                ;; If a node is empty we set the content to "empty"
                (when (and (= (dom/get-data child-node "type") "text")
                           (empty? (dom/get-text child-node)))
-                 (dom/set-html! child-node "&#8203;"))
+                 (dom/set-html! child-node zero-width-space))
 
                ;; Remove mentions that have been modified
                (when (and (= (dom/get-data child-node "type") "mention")
@@ -189,59 +207,65 @@
                (dom/append-child! node (create-text-node)))
 
              (let [new-input (parse-nodes node)]
-               (when (and on-change (<= (count new-input) max-length))
+               (when on-change
                  (on-change new-input))))))
 
         handle-select
         (mf/use-fn
          (fn []
-           (let [node          (mf/ref-val local-ref)
-                 selection     (wapi/get-selection)
-                 range         (wapi/get-range selection 0)
-                 anchor-node   (wapi/range-start-container range)]
-             (when (and (= node anchor-node) (.-collapsed range))
-               (wapi/set-cursor-after! anchor-node)))
+           (when-let [node (mf/ref-val local-ref)]
+             (when-let [selection (wapi/get-selection)]
+               (let [range       (wapi/get-range selection 0)
+                     anchor-node (wapi/range-start-container range)
+                     offset      (wapi/range-start-offset range)]
 
-           (let [node (mf/ref-val local-ref)
-                 [span-node offset] (current-text-node node)
-                 [prev-span prev-offset] @prev-selection]
+                 (when (and (= node anchor-node) (.-collapsed ^js range))
+                   (wapi/set-cursor-after! anchor-node))
 
-             (reset! prev-selection #js [span-node offset])
+                 (when-let [span-node (current-text-node* node anchor-node)]
+                   (let [[prev-span prev-offset]
+                         (mf/ref-val prev-selection-ref)
 
-             (when (= (dom/get-data span-node "type") "mention")
-               (let [from-offset (absolute-offset node prev-span prev-offset)
-                     to-offset (absolute-offset node span-node offset)
+                         node-text
+                         (subs (dom/get-text span-node) 0 offset)
 
-                     [_ prev next]
-                     (->> node
-                          (dom/seq-nodes)
-                          (d/with-prev-next)
-                          (filter (fn [[elem _ _]] (= elem span-node)))
-                          (first))]
+                         current-at-symbol
+                         (str/last-index-of (subs node-text 0 offset) "@")
 
-                 (if (> from-offset to-offset)
-                   (wapi/set-cursor-after! prev)
-                   (wapi/set-cursor-before! next))))
+                         mention-text
+                         (subs node-text current-at-symbol)
 
-             (when span-node
-               (let [node-text (subs (dom/get-text span-node) 0 offset)
+                         at-symbol-inside-word?
+                         (and (> current-at-symbol 0)
+                              (str/word? (str/slice node-text (- current-at-symbol 1) current-at-symbol)))]
 
-                     current-at-symbol
-                     (str/last-index-of (subs node-text 0 offset) "@")
+                     (mf/set-ref-val! prev-selection-ref #js [span-node offset])
 
-                     mention-text
-                     (subs node-text current-at-symbol)]
+                     (when (= (dom/get-data span-node "type") "mention")
+                       (let [from-offset (absolute-offset node prev-span prev-offset)
+                             to-offset   (absolute-offset node span-node offset)
 
-                 (if (re-matches #"@\w*" mention-text)
-                   (do
-                     (reset! cur-mention mention-text)
-                     (rx/push! mentions-s {:type :display-mentions})
-                     (let [mention (subs mention-text 1)]
-                       (when (d/not-empty? mention)
-                         (rx/push! mentions-s {:type :filter-mentions :data mention}))))
-                   (do
-                     (reset! cur-mention nil)
-                     (rx/push! mentions-s {:type :hide-mentions}))))))))
+                             [_ prev next]
+                             (->> node
+                                  (dom/seq-nodes)
+                                  (d/with-prev-next)
+                                  (filter (fn [[elem _ _]] (= elem span-node)))
+                                  (first))]
+                         (if (> from-offset to-offset)
+                           (wapi/set-cursor-after! prev)
+                           (wapi/set-cursor-before! next))))
+
+                     (if (and (not at-symbol-inside-word?)
+                              (re-matches #"@\w*" mention-text))
+                       (do
+                         (reset! cur-mention mention-text)
+                         (rx/push! mentions-s {:type :display-mentions})
+                         (let [mention (subs mention-text 1)]
+                           (when (d/not-empty? mention)
+                             (rx/push! mentions-s {:type :filter-mentions :data mention}))))
+                       (do
+                         (reset! cur-mention nil)
+                         (rx/push! mentions-s {:type :hide-mentions}))))))))))
 
         handle-focus
         (mf/use-fn
@@ -266,9 +290,8 @@
         (mf/use-fn
          (mf/deps on-change)
          (fn [data]
-           (let [node (mf/ref-val local-ref)
-                 [span-node offset] (current-text-node node)]
-             (when span-node
+           (when-let [node (mf/ref-val local-ref)]
+             (when-let [[span-node offset] (current-text-node node)]
                (let [node-text
                      (dom/get-text span-node)
 
@@ -289,7 +312,7 @@
                      after-span (create-text-node (dm/str " " suffix))
                      sel (wapi/get-selection)]
 
-                 (dom/set-html! span-node (if (empty? prefix) "&#8203;" prefix))
+                 (dom/set-html! span-node (if (empty? prefix) zero-width-space prefix))
                  (dom/insert-after! node span-node mention-span)
                  (dom/insert-after! node mention-span after-span)
                  (wapi/set-cursor-after! after-span)
@@ -298,71 +321,78 @@
                  (when (fn? on-change)
                    (on-change (parse-nodes node))))))))
 
+        handle-insert-at-symbol
+        (mf/use-fn
+         (fn []
+           (when-let [node (mf/ref-val local-ref)]
+             (when-let [[span-node] (current-text-node node)]
+               (let [node-text (dom/get-text span-node)
+                     at-symbol (if (blank-content? node-text) "@" " @")]
+
+                 (dom/set-html! span-node (str/concat node-text at-symbol))
+                 (wapi/set-cursor-after! span-node))))))
+
         handle-key-down
         (mf/use-fn
          (mf/deps on-esc on-ctrl-enter handle-select handle-input)
          (fn [event]
            (handle-select event)
+           (when-let [node (mf/ref-val local-ref)]
+             (when-let [[span-node offset] (current-text-node node)]
+               (cond
+                 (and @cur-mention (kbd/enter? event))
+                 (do (dom/prevent-default event)
+                     (dom/stop-propagation event)
+                     (rx/push! mentions-s {:type :insert-selected-mention}))
 
-           (let [node (mf/ref-val local-ref)
-                 [span-node offset] (current-text-node node)]
+                 (and @cur-mention (kbd/down-arrow? event))
+                 (do (dom/prevent-default event)
+                     (dom/stop-propagation event)
+                     (rx/push! mentions-s {:type :insert-next-mention}))
 
-             (cond
-               (and @cur-mention (kbd/enter? event))
-               (do (dom/prevent-default event)
-                   (dom/stop-propagation event)
-                   (rx/push! mentions-s {:type :insert-selected-mention}))
+                 (and @cur-mention (kbd/up-arrow? event))
+                 (do (dom/prevent-default event)
+                     (dom/stop-propagation event)
+                     (rx/push! mentions-s {:type :insert-prev-mention}))
 
-               (and @cur-mention (kbd/down-arrow? event))
-               (do (dom/prevent-default event)
-                   (dom/stop-propagation event)
-                   (rx/push! mentions-s {:type :insert-next-mention}))
+                 (and @cur-mention (kbd/esc? event))
+                 (do (dom/prevent-default event)
+                     (dom/stop-propagation event)
+                     (rx/push! mentions-s {:type :hide-mentions}))
 
-               (and @cur-mention (kbd/up-arrow? event))
-               (do (dom/prevent-default event)
-                   (dom/stop-propagation event)
-                   (rx/push! mentions-s {:type :insert-prev-mention}))
+                 (and (kbd/esc? event) (fn? on-esc))
+                 (on-esc event)
 
-               (and @cur-mention (kbd/esc? event))
-               (do (dom/prevent-default event)
-                   (dom/stop-propagation event)
-                   (rx/push! mentions-s {:type :hide-mentions}))
+                 (and (kbd/mod? event) (kbd/enter? event) (fn? on-ctrl-enter))
+                 (on-ctrl-enter event)
 
-               (and (kbd/esc? event) (fn? on-esc))
-               (on-esc event)
-
-               (and (kbd/mod? event) (kbd/enter? event) (fn? on-ctrl-enter))
-               (on-ctrl-enter event)
-
-               (kbd/enter? event)
-               (let [sel (wapi/get-selection)
-                     range (.getRangeAt sel 0)]
-                 (dom/prevent-default event)
-                 (dom/stop-propagation event)
-                 (let [[span-node offset] (current-text-node node)]
-                   (.deleteContents range)
-                   (handle-input)
-
-                   (when span-node
-                     (let [txt (.-textContent span-node)]
-                       (dom/set-html! span-node (dm/str (subs txt 0 offset) "\n&#8203;" (subs txt offset)))
-                       (wapi/set-cursor! span-node (inc offset))
-                       (handle-input)))))
-
-               (kbd/backspace? event)
-               (let [prev-node (get-prev-node node span-node)]
-                 (when (and (some? prev-node)
-                            (= "mention" (dom/get-data prev-node "type"))
-                            (= offset 1))
+                 (kbd/enter? event)
+                 (let [sel (wapi/get-selection)
+                       range (.getRangeAt sel 0)]
                    (dom/prevent-default event)
                    (dom/stop-propagation event)
-                   (.remove prev-node)))))))]
+                   (let [[span-node offset] (current-text-node node)]
+                     (.deleteContents range)
+                     (handle-input)
 
-    (mf/use-layout-effect
-     (mf/deps autofocus)
-     (fn []
-       (when autofocus
-         (dom/focus! (mf/ref-val local-ref)))))
+                     (when span-node
+                       (let [txt (.-textContent span-node)]
+                         (dom/set-html! span-node (dm/str (subs txt 0 offset) "\n" zero-width-space (subs txt offset)))
+                         (wapi/set-cursor! span-node (inc offset))
+                         (handle-input)))))
+
+                 (kbd/backspace? event)
+                 (let [prev-node (get-prev-node node span-node)]
+                   (when (and (some? prev-node)
+                              (= "mention" (dom/get-data prev-node "type"))
+                              (= offset 1))
+                     (dom/prevent-default event)
+                     (dom/stop-propagation event)
+                     (.remove prev-node))))))))]
+
+    (mf/with-layout-effect [autofocus]
+      (when ^boolean autofocus
+        (dom/focus! (mf/ref-val local-ref))))
 
     ;; Creates the handlers for selection
     (mf/with-effect [handle-select]
@@ -379,17 +409,19 @@
                 (case type
                   :insert-mention
                   (handle-insert-mention data)
+                  :insert-at-symbol
+                  (handle-insert-at-symbol)
 
                   nil))))))
 
     ;; Auto resize input to display the comment
     (mf/with-layout-effect nil
-      (let [^js node (mf/ref-val local-ref)]
+      (when-let [^js node (mf/ref-val local-ref)]
         (set! (.-height (.-style node)) "0")
         (set! (.-height (.-style node)) (str (+ 2 (.-scrollHeight node)) "px"))))
 
     (mf/with-effect [value prev-value]
-      (let [node (mf/ref-val local-ref)]
+      (when-let [node (mf/ref-val local-ref)]
         (cond
           (and (d/not-empty? prev-value) (empty? value))
           (do (dom/set-html! node "")
@@ -418,7 +450,9 @@
   []
   (let [mentions-s (mf/use-ctx mentions-context)
         profile    (mf/deref refs/profile)
-        profiles   (mf/deref refs/profiles)
+
+        team       (mf/deref refs/team)
+        members    (:members team)
 
         state*
         (mf/use-state
@@ -430,10 +464,8 @@
         (deref state*)
 
         mentions-users
-        (mf/with-memo [mention-filter]
-
-
-          (->> (vals profiles)
+        (mf/with-memo [mention-filter members]
+          (->> members
                (filter (fn [{:keys [id fullname email]}]
                          (and
                           (not= id (:id profile))
@@ -454,9 +486,12 @@
            (dom/stop-propagation event)
            (let [id (-> (dom/get-current-target event)
                         (dom/get-data "user-id")
-                        (uuid/uuid))]
+                        (uuid/uuid))
+
+                 user   (d/seek #(= (:id %) id) members)]
+
              (rx/push! mentions-s {:type :insert-mention
-                                   :data {:user (get profiles id)}}))))]
+                                   :data {:user user}}))))]
 
     (mf/with-effect [mentions-users selected]
       (let [sub
@@ -511,15 +546,25 @@
   {::mf/props :obj
    ::mf/private true}
   []
-  (let [mentions-s      (mf/use-ctx mentions-context)
+  (let [mentions-s        (mf/use-ctx mentions-context)
         display-mentions* (mf/use-state false)
 
-        handle-mouse-down
+        handle-pointer-down
         (mf/use-fn
+         (mf/deps @display-mentions*)
          (fn [event]
            (dom/prevent-default event)
            (dom/stop-propagation event)
-           (rx/push! mentions-s {:type :display-mentions})))]
+           (if @display-mentions*
+             (rx/push! mentions-s {:type :hide-mentions})
+             (rx/push! mentions-s {:type :insert-at-symbol}))))
+
+        handle-key-down
+        (mf/use-fn
+         (mf/deps @display-mentions*)
+         (fn [event]
+           (when (or (kbd/enter? event) (kbd/space? event))
+             (handle-pointer-down event))))]
 
     (mf/use-effect
      (fn []
@@ -535,8 +580,9 @@
 
     [:> icon-button*
      {:variant "ghost"
-      :aria-label (tr "labels.options")
-      :on-pointer-down handle-mouse-down
+      :aria-label (tr "labels.mention")
+      :on-pointer-down handle-pointer-down
+      :on-key-down handle-key-down
       :icon-class (stl/css-case :open-mentions-button true
                                 :is-toggled @display-mentions*)
       :icon "at"}]))
@@ -544,22 +590,25 @@
 (def ^:private schema:comment-avatar
   [:map
    [:class {:optional true} :string]
-   [:image :string]
+   [:image {:optional true} :string]
    [:variant {:optional true}
     [:maybe [:enum "read" "unread" "solved"]]]])
 
 (mf/defc comment-avatar*
   {::mf/schema schema:comment-avatar}
-  [{:keys [image variant class] :rest props}]
+  [{:keys [image variant class children] :rest props}]
   (let [variant (or variant "read")
-        class (dm/str class " " (stl/css-case :avatar true
-                                              :avatar-read (= variant "read")
-                                              :avatar-unread (= variant "unread")
-                                              :avatar-solved (= variant "solved")))
-        props (mf/spread-props props {:class class})]
+        class   (dm/str class " " (stl/css-case :avatar true
+                                                :avatar-read (= variant "read")
+                                                :avatar-unread (= variant "unread")
+                                                :avatar-solved (= variant "solved")))
+        props   (mf/spread-props props {:class class})]
+
     [:> :div props
-     [:img {:src image
-            :class (stl/css :avatar-image)}]
+     (if image
+       [:img {:src image
+              :class (stl/css :avatar-image)}]
+       [:div {:class (stl/css :avatar-text)} children])
      [:div {:class (stl/css-case :avatar-mask true
                                  :avatar-darken (= variant "solved"))}]]))
 
@@ -581,9 +630,10 @@
     [:> comment-content* {:content (:content item)}]]
 
    [:div {:class (stl/css :replies)}
-    (let [total-comments (:count-comments item 1)
-          total-replies  (dec total-comments)
-          unread-replies (:count-unread-comments item 0)]
+    (let [total-comments  (:count-comments item)
+          unread-comments (:count-unread-comments item)
+          total-replies   (dec total-comments)
+          unread-replies  (if (= unread-comments total-comments) (dec unread-comments) unread-comments)]
       [:*
        (when (> total-replies 0)
          (if (= total-replies 1)
@@ -595,15 +645,51 @@
            [:span {:class (stl/css :replies-unread)} (str unread-replies " " (tr "labels.reply.new"))]
            [:span {:class (stl/css :replies-unread)} (str unread-replies " " (tr "labels.replies.new"))]))])]])
 
+(mf/defc comment-form-buttons*
+  {::mf/props :obj
+   ::mf/private true}
+  [{:keys [on-submit on-cancel is-disabled]}]
+  (let [handle-cancel
+        (mf/use-fn
+         (mf/deps on-cancel)
+         (fn [event]
+           (when (kbd/enter? event)
+             (on-cancel))))
+
+        handle-submit
+        (mf/use-fn
+         (mf/deps on-submit)
+         (fn [event]
+           (when (kbd/enter? event)
+             (on-submit))))]
+
+    [:div {:class (stl/css :form-buttons-wrapper)}
+     [:> mentions-button*]
+     [:> button* {:variant "ghost"
+                  :type "button"
+                  :on-key-down handle-cancel
+                  :on-click on-cancel}
+      (tr "ds.confirm-cancel")]
+     [:> button* {:variant "primary"
+                  :type "button"
+                  :on-key-down handle-submit
+                  :on-click on-submit
+                  :disabled is-disabled}
+      (tr "labels.post")]]))
+
+(defn- exceeds-length?
+  [content]
+  (> (count content) 750))
+
 (mf/defc comment-reply-form*
   {::mf/props :obj
    ::mf/private true}
-  [{:keys [thread]}]
+  [{:keys [on-submit]}]
   (let [show-buttons? (mf/use-state false)
         content       (mf/use-state "")
 
-        disabled? (or (str/blank? @content)
-                      (str/empty? @content))
+        disabled? (or (blank-content? @content)
+                      (exceeds-length? @content))
 
         on-focus
         (mf/use-fn
@@ -622,11 +708,11 @@
          #(do (reset! content "")
               (reset! show-buttons? false)))
 
-        on-submit
+        on-submit*
         (mf/use-fn
-         (mf/deps thread @content)
+         (mf/deps @content)
          (fn []
-           (st/emit! (dcm/add-comment thread @content))
+           (on-submit @content)
            (on-cancel)))]
 
     [:div {:class (stl/css :form)}
@@ -636,24 +722,23 @@
        :autofocus true
        :on-blur on-blur
        :on-focus on-focus
-       :on-ctrl-enter on-submit
-       :on-change on-change
-       :max-length 750}]
+       :on-ctrl-enter on-submit*
+       :on-change on-change}]
+     (when (exceeds-length? @content)
+       [:div {:class (stl/css :error-text)}
+        (tr "errors.character-limit-exceeded")])
      (when (or @show-buttons? (seq @content))
-       [:div {:class (stl/css :form-buttons-wrapper)}
-        [:> mentions-button*]
-        [:> button* {:variant "ghost"
-                     :on-click on-cancel}
-         (tr "ds.confirm-cancel")]
-        [:> button* {:variant "primary"
-                     :on-click on-submit
-                     :disabled disabled?}
-         (tr "labels.post")]])]))
+       [:> comment-form-buttons* {:on-submit on-submit*
+                                  :on-cancel on-cancel
+                                  :is-disabled disabled?}])]))
 
 (mf/defc comment-edit-form*
   {::mf/private true}
   [{:keys [content on-submit on-cancel]}]
-  (let [content (mf/use-state content)
+  (let [content   (mf/use-state content)
+
+        disabled? (or (blank-content? @content)
+                      (exceeds-length? @content))
 
         on-change
         (mf/use-fn
@@ -662,27 +747,20 @@
         on-submit*
         (mf/use-fn
          (mf/deps @content)
-         (fn [] (on-submit @content)))
-
-        disabled? (or (str/blank? @content)
-                      (str/empty? @content))]
+         (fn [] (on-submit @content)))]
 
     [:div {:class (stl/css :form)}
      [:> comment-input*
       {:value @content
        :autofocus true
        :on-ctrl-enter on-submit*
-       :on-change on-change
-       :max-length 750}]
-     [:div {:class (stl/css :form-buttons-wrapper)}
-      [:> mentions-button*]
-      [:> button* {:variant "ghost"
-                   :on-click on-cancel}
-       (tr "ds.confirm-cancel")]
-      [:> button* {:variant "primary"
-                   :on-click on-submit*
-                   :disabled disabled?}
-       (tr "labels.post")]]]))
+       :on-change on-change}]
+     (when (exceeds-length? @content)
+       [:div {:class (stl/css :error-text)}
+        (tr "errors.character-limit-exceeded")])
+     [:> comment-form-buttons* {:on-submit on-submit*
+                                :on-cancel on-cancel
+                                :is-disabled disabled?}]]))
 
 (mf/defc comment-floating-thread-draft*
   [{:keys [draft zoom on-cancel on-submit position-modifier]}]
@@ -698,8 +776,8 @@
         pos-x     (* (:x position) zoom)
         pos-y     (* (:y position) zoom)
 
-        disabled? (or (str/blank? content)
-                      (str/empty? content))
+        disabled? (or (blank-content? content)
+                      (exceeds-length? content))
 
         on-esc
         (mf/use-fn
@@ -716,10 +794,11 @@
          (fn [content]
            (st/emit! (dcm/update-draft-thread {:content content}))))
 
-        on-submit
+        on-submit*
         (mf/use-fn
          (mf/deps draft)
-         (partial on-submit draft))]
+         (fn []
+           (on-submit draft)))]
 
     [:> (mf/provider mentions-context) {:value mentions-s}
      [:div
@@ -730,7 +809,7 @@
        :on-click dom/stop-propagation}
       [:> comment-avatar* {:class (stl/css :avatar-lg)
                            :image (cfg/resolve-profile-photo-url profile)}]]
-     [:div {:class (stl/css :floating-thread-wrapper)
+     [:div {:class (stl/css :floating-thread-wrapper :cursor-auto)
             :style {:top (str (- pos-y 24) "px")
                     :left (str (+ pos-x 28) "px")}
             :on-click dom/stop-propagation}
@@ -741,19 +820,13 @@
          :autofocus true
          :on-esc on-esc
          :on-change on-change
-         :on-ctrl-enter on-submit
-         :max-length 750}]
-
-       [:div {:class (stl/css :form-buttons-wrapper)}
-        [:> mentions-button*]
-        [:> button* {:variant "ghost"
-                     :on-click on-esc}
-         (tr "ds.confirm-cancel")]
-        [:> button* {:variant "primary"
-                     :on-click on-submit
-                     :disabled disabled?}
-         (tr "labels.post")]]]
-
+         :on-ctrl-enter on-submit*}]
+       (when (exceeds-length? content)
+         [:div {:class (stl/css :error-text)}
+          (tr "errors.character-limit-exceeded")])
+       [:> comment-form-buttons* {:on-submit on-submit*
+                                  :on-cancel on-esc
+                                  :is-disabled disabled?}]]
       [:> mentions-panel*]]]))
 
 (mf/defc comment-floating-thread-header*
@@ -931,7 +1004,7 @@
   {::mf/wrap [mf/memo]}
   [{:keys [thread zoom origin position-modifier viewport]}]
   (let [ref           (mf/use-ref)
-        mentions-s (mf/use-memo #(rx/subject))
+        mentions-s    (mf/use-memo #(rx/subject))
         thread-id     (:id thread)
         thread-pos    (:position thread)
 
@@ -958,7 +1031,13 @@
                         (->> (vals comments-map)
                              (sort-by :created-at)))
 
-        first-comment (first comments)]
+        first-comment (first comments)
+
+        on-submit
+        (mf/use-fn
+         (mf/deps thread)
+         (fn [content]
+           (st/emit! (dcm/add-comment thread content))))]
 
     (mf/with-effect [thread-id]
       (st/emit! (dcm/retrieve-comments thread-id)))
@@ -973,6 +1052,7 @@
     [:> (mf/provider mentions-context) {:value mentions-s}
      (when (some? first-comment)
        [:div {:class (stl/css-case :floating-thread-wrapper true
+                                   :cursor-auto true
                                    :left (= (:h-dir pos) :left)
                                    :top (= (:v-dir pos) :top))
               :id (str "thread-" thread-id)
@@ -992,26 +1072,87 @@
            [:* {:key (dm/str (:id item))}
             [:> comment-floating-thread-item* {:comment item}]])]
 
-        [:> comment-reply-form* {:thread thread}]
+        [:> comment-reply-form* {:on-submit on-submit}]
 
         [:> mentions-panel*]])]))
+
+(defn group-bubbles
+  "Group bubbles in different vectors by proximity"
+  ([zoom circles]
+   (group-bubbles zoom circles [] []))
+
+  ([zoom circles visited groups]
+   (if (empty? circles)
+     groups
+     (let [current (first circles)
+           remaining (rest circles)
+           overlapping-group (some (fn [group]
+                                     (when (some (partial dwcm/overlap-bubbles? zoom current) group) group))
+                                   groups)]
+       (if overlapping-group
+         (group-bubbles zoom remaining visited (map (fn [group]
+                                                      (if (= group overlapping-group)
+                                                        (cons current group)
+                                                        group))
+                                                    groups))
+         (group-bubbles zoom remaining visited (cons [current] groups)))))))
+
+(defn- calculate-zoom-scale-to-ungroup-bubbles
+  "Calculate the minimum zoom scale needed for a group of bubbles to avoid overlap among them"
+  [zoom threads]
+  (let [num-threads         (count threads)
+        num-grouped-threads (count (group-bubbles zoom threads))
+        zoom-scale-step     1.75]
+    (if (= num-threads num-grouped-threads)
+      zoom
+      (calculate-zoom-scale-to-ungroup-bubbles (* zoom zoom-scale-step) threads))))
+
+(mf/defc comment-floating-group*
+  {::mf/wrap [mf/memo]}
+  [{:keys [thread-group zoom position-modifier]}]
+  (let [positions   (mapv :position thread-group)
+
+        position    (gpt/center-points positions)
+        position    (cond-> position
+                      (some? position-modifier)
+                      (gpt/transform position-modifier))
+        pos-x       (* (:x position) zoom)
+        pos-y       (* (:y position) zoom)
+
+        unread?     (some #(pos? (:count-unread-comments %)) thread-group)
+        num-threads (str (count thread-group))
+
+        test-id     (str/join "-" (map :seqn (sort-by :seqn thread-group)))
+
+        on-click
+        (mf/use-fn
+         (mf/deps thread-group position)
+         (fn []
+           (let [updated-zoom (calculate-zoom-scale-to-ungroup-bubbles zoom thread-group)
+                 scale-zoom   (/ updated-zoom zoom)]
+             (st/emit! (dwz/set-zoom position scale-zoom)))))]
+
+    [:div {:style {:top (dm/str pos-y "px")
+                   :left (dm/str pos-x "px")}
+           :on-click on-click
+           :class (stl/css :floating-preview-wrapper :floating-preview-bubble)}
+     [:> comment-avatar*
+      {:class (stl/css :avatar-lg)
+       :variant (if unread? "unread" "read")
+       :data-testid (dm/str "floating-thread-bubble-" test-id)}
+      num-threads]]))
 
 (mf/defc comment-floating-bubble*
   {::mf/wrap [mf/memo]}
   [{:keys [thread zoom is-open on-click origin position-modifier]}]
   (let [owner        (mf/with-memo [thread]
                        (dcm/get-owner thread))
-        base-pos     (cond-> (:position thread)
+
+        position     (:position thread)
+        position     (cond-> position
                        (some? position-modifier)
                        (gpt/transform position-modifier))
 
-        drag?        (mf/use-ref nil)
-        was-open?    (mf/use-ref nil)
-
-        dragging-ref (mf/use-ref false)
-        start-ref    (mf/use-ref nil)
-
-        position     (:position thread)
         frame-id     (:frame-id thread)
 
         state        (mf/use-state
@@ -1021,8 +1162,14 @@
                             :new-position-y nil
                             :new-frame-id frame-id}))
 
-        pos-x        (floor (* (or (:new-position-x @state) (:x base-pos)) zoom))
-        pos-y        (floor (* (or (:new-position-y @state) (:y base-pos)) zoom))
+        pos-x        (floor (* (or (:new-position-x @state) (:x position)) zoom))
+        pos-y        (floor (* (or (:new-position-y @state) (:y position)) zoom))
+
+        drag?        (mf/use-ref nil)
+        was-open?    (mf/use-ref nil)
+
+        dragging-ref (mf/use-ref false)
+        start-ref    (mf/use-ref nil)
 
         on-pointer-down
         (mf/use-fn
@@ -1108,11 +1255,13 @@
            :on-pointer-leave on-pointer-leave
            :on-click on-click*
            :class (stl/css-case :floating-preview-wrapper true
-                                :floating-preview-bubble (false? (:is-hover @state))
-                                :grabbing (true? (:is-grabbing @state)))}
+                                :floating-preview-bubble (false? (:is-hover @state)))}
 
      (if (:is-hover @state)
-       [:div {:class (stl/css :floating-thread-wrapper :floating-preview-displacement)}
+       [:div {:class (stl/css-case :floating-thread-wrapper true
+                                   :floating-preview-displacement true
+                                   :cursor-pointer (false? (:is-grabbing @state))
+                                   :cursor-grabbing (true? (:is-grabbing @state)))}
         [:div {:class (stl/css :floating-thread-item-wrapper)}
          [:div {:class (stl/css :floating-thread-item)}
           [:> comment-info* {:item thread
@@ -1181,8 +1330,8 @@
     [:div {:class (stl/css :cover)
            :on-click on-click*}
      [:div {:class (stl/css :location)}
-      [:> icon* {:icon-id "comments"
-                 :class (stl/css :location-icon)}]
+      [:div {:class (stl/css :location-icon)}
+       [:> icon* {:icon-id "comments"}]]
       [:div {:class (stl/css :location-text)}
        (str "#" (:seqn item))
        (str " " (:file-name item))

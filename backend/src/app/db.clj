@@ -22,7 +22,8 @@
    [clojure.set :as set]
    [integrant.core :as ig]
    [next.jdbc :as jdbc]
-   [next.jdbc.date-time :as jdbc-dt])
+   [next.jdbc.date-time :as jdbc-dt]
+   [next.jdbc.transaction])
   (:import
    com.zaxxer.hikari.HikariConfig
    com.zaxxer.hikari.HikariDataSource
@@ -223,16 +224,6 @@
     (let [^OutputStream os (.getOutputStream ^LargeObject lobj)]
       (io/make-output-stream os opts))))
 
-(defmacro with-atomic
-  [& args]
-  (if (symbol? (first args))
-    (let [cfgs (first args)
-          body (rest args)]
-      `(jdbc/with-transaction [conn# (::pool ~cfgs)]
-         (let [~cfgs (assoc ~cfgs ::conn conn#)]
-           ~@body)))
-    `(jdbc/with-transaction ~@args)))
-
 (defn open
   [system-or-pool]
   (if (pool? system-or-pool)
@@ -270,19 +261,17 @@
     :else           (throw (IllegalArgumentException. "unable to resolve connectable"))))
 
 (def ^:private params-mapping
-  {::return-keys? :return-keys
-   ::return-keys :return-keys})
+  {::return-keys :return-keys})
 
 (defn rename-opts
   [opts]
   (set/rename-keys opts params-mapping))
 
 (def ^:private default-insert-opts
-  {:builder-fn sql/as-kebab-maps
-   :return-keys true})
+  (assoc sql/default-opts :return-keys true))
 
 (def ^:private default-opts
-  {:builder-fn sql/as-kebab-maps})
+  sql/default-opts)
 
 (defn exec!
   ([ds sv] (exec! ds sv nil))
@@ -333,7 +322,7 @@
 (defn update!
   "A helper that build an UPDATE SQL statement and executes it.
 
-   Given a connectable object, a table name, a hash map of columns and
+  Given a connectable object, a table name, a hash map of columns and
   values to set, and either a hash map of columns and values to search
   on or a vector of a SQL where clause and parameters, perform an
   update on the table.
@@ -413,10 +402,20 @@
                 :hint "database object not found"))
     row))
 
+(def ^:private default-plan-opts
+  (-> default-opts
+      (assoc :fetch-size 1000)
+      (assoc :concurrency :read-only)
+      (assoc :cursors :close)
+      (assoc :result-type :forward-only)))
+
 (defn plan
-  [ds sql]
-  (-> (get-connectable ds)
-      (jdbc/plan sql sql/default-opts)))
+  ([ds sql]
+   (-> (get-connectable ds)
+       (jdbc/plan sql default-plan-opts)))
+  ([ds sql opts]
+   (-> (get-connectable ds)
+       (jdbc/plan sql (merge default-plan-opts opts)))))
 
 (defn cursor
   "Return a lazy seq of rows using server side cursors"
@@ -527,43 +526,31 @@
      (l/trc :hint "explicit rollback requested (savepoint)")
      (.rollback conn sp))))
 
+(defn transact!
+  "A lower-level function for executing function in a transaction"
+  ([transactable f] (transact! transactable f {}))
+  ([transactable f opts]
+   (binding [next.jdbc.transaction/*nested-tx* :ignore]
+     (jdbc/transact transactable f opts))))
+
 (defn tx-run!
+  "Run a function in a transaction."
   [system f & params]
-  (cond
-    (connection? system)
+  (if (connection? system)
     (tx-run! {::conn system} f)
-
-    (pool? system)
-    (tx-run! {::pool system} f)
-
-    (::conn system)
-    (let [conn (::conn system)
-          sp   (savepoint conn)]
-      (try
-        (let [system' (-> system
-                          (assoc ::savepoint sp)
-                          (dissoc ::rollback))
-              result  (apply f system' params)]
-          (if (::rollback system)
-            (rollback! conn sp)
-            (release! conn sp))
-          result)
-        (catch Throwable cause
-          (.rollback ^Connection conn ^Savepoint sp)
-          (throw cause))))
-
-    (::pool system)
-    (with-atomic [conn (::pool system)]
-      (let [system' (-> system
-                        (assoc ::conn conn)
-                        (dissoc ::rollback))
-            result  (apply f system' params)]
-        (when (::rollback system)
-          (rollback! conn))
-        result))
-
-    :else
-    (throw (IllegalArgumentException. "invalid system/cfg provided"))))
+    (if (pool? system)
+      (tx-run! {::pool system} f)
+      (if-let [conn (or (::conn system)
+                        (::pool system))]
+        (transact! conn
+                   (fn [conn]
+                     (let [system' (-> system
+                                       (dissoc ::rollback)
+                                       (assoc ::conn conn))]
+                       (apply f system' params)))
+                   {:rollback-only (::rollback system)
+                    :read-only (::read-only system)})
+        (throw (IllegalArgumentException. "invalid system/cfg provided"))))))
 
 (defn run!
   [system f & params]

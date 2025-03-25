@@ -28,6 +28,8 @@
    [app.main.data.workspace.guides :as-alias dwg]
    [app.main.data.workspace.shapes :as dwsh]
    [app.main.data.workspace.undo :as dwu]
+   [app.main.features :as features]
+   [app.render-wasm.api :as wasm.api]
    [beicon.v2.core :as rx]
    [potok.v2.core :as ptk]))
 
@@ -160,8 +162,13 @@
       change-to-fixed?
       (assoc :grow-type :fixed))))
 
-(defn- clear-local-transform []
+(defn clear-local-transform []
   (ptk/reify ::clear-local-transform
+    ptk/EffectEvent
+    (effect [_ state _]
+      (when (features/active-feature? state "render-wasm/v1")
+        (wasm.api/set-modifiers nil)))
+
     ptk/UpdateEvent
     (update [_ state]
       (-> state
@@ -328,14 +335,17 @@
 
 (defn- calculate-modifiers
   ([state modif-tree]
-   (calculate-modifiers state false false modif-tree))
+   (calculate-modifiers state false false modif-tree nil))
 
-  ([state ignore-constraints ignore-snap-pixel modif-tree]
-   (calculate-modifiers state ignore-constraints ignore-snap-pixel modif-tree nil))
+  ([state ignore-constraints ignore-snap-pixel modif-tree page-id]
+   (calculate-modifiers state ignore-constraints ignore-snap-pixel modif-tree page-id nil))
 
-  ([state ignore-constraints ignore-snap-pixel modif-tree params]
-   (let [objects
-         (dsh/lookup-page-objects state)
+  ([state ignore-constraints ignore-snap-pixel modif-tree page-id params]
+   (let [page-id
+         (or page-id (:current-page-id state))
+
+         objects
+         (dsh/lookup-page-objects state page-id)
 
          snap-pixel?
          (and (not ignore-snap-pixel) (contains? (:workspace-layout state) :snap-pixel-grid))
@@ -388,6 +398,7 @@
      (update [_ state]
        (update state :workspace-modifiers calculate-update-modifiers state ignore-constraints ignore-snap-pixel modif-tree)))))
 
+
 (defn set-modifiers
   ([modif-tree]
    (set-modifiers modif-tree false))
@@ -402,7 +413,40 @@
    (ptk/reify ::set-modifiers
      ptk/UpdateEvent
      (update [_ state]
-       (assoc state :workspace-modifiers (calculate-modifiers state ignore-constraints ignore-snap-pixel modif-tree params))))))
+       (let [page-id   (:current-page-id state)
+             modifiers (calculate-modifiers state ignore-constraints ignore-snap-pixel modif-tree page-id params)]
+         (assoc state :workspace-modifiers modifiers))))))
+
+(defn set-wasm-modifiers
+  ([modif-tree]
+   (set-wasm-modifiers modif-tree false))
+
+  ([modif-tree ignore-constraints]
+   (set-wasm-modifiers modif-tree ignore-constraints false))
+
+  ([modif-tree ignore-constraints ignore-snap-pixel]
+   (set-wasm-modifiers modif-tree ignore-constraints ignore-snap-pixel nil))
+
+  ([modif-tree _ignore-constraints _ignore-snap-pixel _params]
+   (ptk/reify ::set-wasm-modifiers
+     ptk/EffectEvent
+     (effect [_ _ _]
+       (let [entries
+             (->> modif-tree
+                  (mapv (fn [[id data]]
+                          {:id id
+                           :transform (ctm/modifiers->transform (:modifiers data))})))
+
+             modifiers-new
+             (wasm.api/propagate-modifiers entries)]
+         (wasm.api/set-modifiers modifiers-new))))))
+
+(defn set-selrect-transform
+  [modifiers]
+  (ptk/reify ::set-selrect-transform
+    ptk/UpdateEvent
+    (update [_ state]
+      (assoc state :workspace-selrect-transform (ctm/modifiers->transform modifiers)))))
 
 (def ^:private
   xf-rotation-shape
@@ -413,6 +457,33 @@
 
 ;; Rotation use different algorithm to calculate children
 ;; modifiers (and do not use child constraints).
+(defn set-wasm-rotation-modifiers
+  ([angle shapes]
+   (set-wasm-rotation-modifiers angle shapes (-> shapes gsh/shapes->rect grc/rect->center)))
+
+  ([angle shapes center]
+   (ptk/reify ::set-wasm-rotation-modifiers
+     ptk/EffectEvent
+     (effect [_ state _]
+       (let [objects (dsh/lookup-page-objects state)
+             ids     (sequence xf-rotation-shape shapes)
+
+             get-modifier
+             (fn [shape]
+               (ctm/rotation-modifiers shape center angle))
+
+             modif-tree
+             (-> (build-modif-tree ids objects get-modifier)
+                 (gm/set-objects-modifiers objects))
+
+             modifiers
+             (->> modif-tree
+                  (map (fn [[id {:keys [modifiers]}]]
+                         {:id id
+                          :transform (ctm/modifiers->transform modifiers)})))]
+
+         (wasm.api/set-modifiers modifiers))))))
+
 (defn set-rotation-modifiers
   ([angle shapes]
    (set-rotation-modifiers angle shapes (-> shapes gsh/shapes->rect grc/rect->center)))
@@ -438,11 +509,12 @@
 ;; - It consideres the center for everyshape instead of the center of the total selrect
 ;; - The angle param is the desired final value, not a delta
 (defn set-delta-rotation-modifiers
-  [angle shapes {:keys [center delta?] :or {center nil delta? false}}]
+  [angle shapes {:keys [center delta? page-id] :or {center nil delta? false}}]
   (ptk/reify ::set-delta-rotation-modifiers
     ptk/UpdateEvent
     (update [_ state]
-      (let [objects (dsh/lookup-page-objects state)
+      (let [page-id (or page-id (:current-page-id state))
+            objects (dsh/lookup-page-objects state page-id)
             ids
             (->> shapes
                  (remove #(get % :blocked false))
@@ -461,109 +533,125 @@
 
         (assoc state :workspace-modifiers modif-tree)))))
 
+(def ^:private xf:without-uuid-zero
+  (remove #(= % uuid/zero)))
+
+(def ^:private transform-attrs
+  #{:selrect
+    :points
+    :x
+    :y
+    :r1
+    :r2
+    :r3
+    :r4
+    :shadow
+    :blur
+    :strokes
+    :width
+    :height
+    :content
+    :transform
+    :transform-inverse
+    :rotation
+    :flip-x
+    :flip-y
+    :grow-type
+    :position-data
+    :layout-gap
+    :layout-padding
+    :layout-item-h-sizing
+    :layout-item-max-h
+    :layout-item-max-w
+    :layout-item-min-h
+    :layout-item-min-w
+    :layout-item-v-sizing
+    :layout-padding-type
+    :layout-item-margin
+    :layout-item-margin-type
+    :layout-grid-cells
+    :layout-grid-columns
+    :layout-grid-rows})
+
+(defn apply-modifiers*
+  "A lower-level version of apply-modifiers, that expects receive ready
+  to use objects, object-modifiers and text-modifiers."
+  [objects object-modifiers text-modifiers options]
+  (ptk/reify ::apply-modifiers*
+    ptk/WatchEvent
+    (watch [_ _ _]
+      (let [ids
+            (into [] xf:without-uuid-zero (keys object-modifiers))
+
+            ids-with-children
+            (into ids
+                  (mapcat (partial cfh/get-children-ids objects))
+                  ids)
+
+            ignore-tree
+            (calculate-ignore-tree object-modifiers objects)
+
+            options
+            (-> options
+                (assoc :reg-objects? true)
+                (assoc :ignore-tree ignore-tree)
+                 ;; Attributes that can change in the transform. This
+                 ;; way we don't have to check all the attributes
+                (assoc :attrs transform-attrs))
+
+            update-shape
+            (fn [shape]
+              (let [shape-id    (dm/get-prop shape :id)
+                    modifiers   (dm/get-in object-modifiers [shape-id :modifiers])
+                    text-shape? (cfh/text-shape? shape)
+                    pos-data    (when ^boolean text-shape?
+                                  (dm/get-in text-modifiers [shape-id :position-data]))]
+                (-> shape
+                    (gsh/transform-shape modifiers)
+                    (cond-> (d/not-empty? pos-data)
+                      (assoc-position-data pos-data shape))
+                    (cond-> text-shape?
+                      (update-grow-type shape)))))]
+
+        (rx/of (ptk/event ::dwg/move-frame-guides {:ids ids-with-children :modifiers object-modifiers})
+               (ptk/event ::dwcm/move-frame-comment-threads ids-with-children)
+               (dwsh/update-shapes ids update-shape options))))))
+
 (defn apply-modifiers
   ([]
    (apply-modifiers nil))
-
-  ([{:keys [modifiers undo-transation? stack-undo? ignore-constraints
-            ignore-snap-pixel ignore-touched undo-group]
-     :or {undo-transation? true stack-undo? false ignore-constraints false
-          ignore-snap-pixel false ignore-touched false}}]
+  ([{:keys [modifiers undo-transation? ignore-constraints
+            ignore-snap-pixel page-id]
+     :or {undo-transation? true  ignore-constraints false
+          ignore-snap-pixel false}
+     :as options}]
    (ptk/reify ::apply-modifiers
      ptk/WatchEvent
      (watch [_ state _]
-       (let [text-modifiers    (get state :workspace-text-modifier)
-             objects           (dsh/lookup-page-objects state)
+       (let [text-modifiers (get state :workspace-text-modifier)
+             page-id        (or page-id (:current-page-id state))
+             objects        (dsh/lookup-page-objects state page-id)
 
              object-modifiers
              (if (some? modifiers)
-               (calculate-modifiers state ignore-constraints ignore-snap-pixel modifiers)
+               (calculate-modifiers state ignore-constraints ignore-snap-pixel modifiers page-id)
                (get state :workspace-modifiers))
 
-             ids
-             (into []
-                   (remove #(= % uuid/zero))
-                   (keys object-modifiers))
-
-             ids-with-children
-             (into ids
-                   (mapcat (partial cfh/get-children-ids objects))
-                   ids)
-
-             ignore-tree
-             (calculate-ignore-tree object-modifiers objects)
-
-             undo-id     (js/Symbol)]
+             undo-id
+             (js/Symbol)]
 
          (rx/concat
           (if undo-transation?
             (rx/of (dwu/start-undo-transaction undo-id))
             (rx/empty))
-          (rx/of (ptk/event ::dwg/move-frame-guides {:ids ids-with-children :modifiers object-modifiers})
-                 (ptk/event ::dwcm/move-frame-comment-threads ids-with-children)
-                 (dwsh/update-shapes
-                  ids
-                  (fn [shape]
-                    (let [modif (get-in object-modifiers [(:id shape) :modifiers])
-                          text-shape? (cfh/text-shape? shape)
-                          position-data (when text-shape?
-                                          (dm/get-in text-modifiers [(:id shape) :position-data]))]
-                      (-> shape
-                          (gsh/transform-shape modif)
-                          (cond-> (d/not-empty? position-data)
-                            (assoc-position-data position-data shape))
-                          (cond-> text-shape?
-                            (update-grow-type shape)))))
-                  {:reg-objects? true
-                   :stack-undo? stack-undo?
-                   :ignore-tree ignore-tree
-                   :ignore-touched ignore-touched
-                   :undo-group undo-group
-                   ;; Attributes that can change in the transform. This way we don't have to check
-                   ;; all the attributes
-                   :attrs [:selrect
-                           :points
-                           :x
-                           :y
-                           :r1
-                           :r2
-                           :r3
-                           :r4
-                           :shadow
-                           :blur
-                           :strokes
-                           :width
-                           :height
-                           :content
-                           :transform
-                           :transform-inverse
-                           :rotation
-                           :flip-x
-                           :flip-y
-                           :grow-type
-                           :position-data
-                           :layout-gap
-                           :layout-padding
-                           :layout-item-h-sizing
-                           :layout-item-margin
-                           :layout-item-max-h
-                           :layout-item-max-w
-                           :layout-item-min-h
-                           :layout-item-min-w
-                           :layout-item-v-sizing
-                           :layout-padding-type
-                           :layout-gap
-                           :layout-item-margin
-                           :layout-item-margin-type
-                           :layout-grid-cells
-                           :layout-grid-columns
-                           :layout-grid-rows]})
-                 ;; We've applied the text-modifier so we can dissoc the temporary data
+          (rx/of (apply-modifiers* objects object-modifiers text-modifiers options)
                  (fn [state]
-                   (update state :workspace-text-modifier #(apply dissoc % ids))))
+                   (let [ids (into [] xf:without-uuid-zero (keys object-modifiers))]
+                     (update state :workspace-text-modifier #(apply dissoc % ids)))))
           (if (nil? modifiers)
             (rx/of (clear-local-transform))
             (rx/empty))
           (if undo-transation?
             (rx/of (dwu/commit-undo-transaction undo-id))
             (rx/empty))))))))
+

@@ -59,7 +59,8 @@
   [t]
   (token-types t))
 
-(def token-name-ref :string)
+(def token-name-ref
+  [:and :string [:re #"^(?!\$)([a-zA-Z0-9-$]+\.?)*(?<!\.)$"]])
 
 (defn valid-token-name-ref?
   [n]
@@ -128,6 +129,10 @@
   [:p2 {:optional true} token-name-ref]
   [:p3 {:optional true} token-name-ref]
   [:p4 {:optional true} token-name-ref]
+  [:m1 {:optional true} token-name-ref]
+  [:m2 {:optional true} token-name-ref]
+  [:m3 {:optional true} token-name-ref]
+  [:m4 {:optional true} token-name-ref]
   [:x {:optional true} token-name-ref]
   [:y {:optional true} token-name-ref]])
 
@@ -174,15 +179,22 @@
   ::dimensions])
 
 (defn shape-attr->token-attrs
-  [shape-attr]
-  (cond
-    (= :fills shape-attr) #{:fill}
-    (= :strokes shape-attr) #{:stroke-color :stroke-width}
-    (border-radius-keys shape-attr) #{shape-attr}
-    (sizing-keys shape-attr) #{shape-attr}
-    (opacity-keys shape-attr) #{shape-attr}
-    (spacing-keys shape-attr) #{shape-attr}
-    (rotation-keys shape-attr) #{shape-attr}))
+  ([shape-attr] (shape-attr->token-attrs shape-attr nil))
+  ([shape-attr changed-sub-attr]
+   (cond
+     (= :fills shape-attr) #{:fill}
+     (and (= :strokes shape-attr) (nil? changed-sub-attr)) #{:stroke-width :stroke-color}
+     (= :strokes shape-attr)
+     (cond
+       (some #{:stroke-color} changed-sub-attr) #{:stroke-color}
+       (some #{:stroke-width} changed-sub-attr) #{:stroke-width})
+     (and (= :layout-padding shape-attr) (seq changed-sub-attr)) changed-sub-attr
+     (and (= :layout-item-margin shape-attr) (seq changed-sub-attr)) changed-sub-attr
+     (border-radius-keys shape-attr) #{shape-attr}
+     (sizing-keys shape-attr) #{shape-attr}
+     (opacity-keys shape-attr) #{shape-attr}
+     (spacing-keys shape-attr) #{shape-attr}
+     (rotation-keys shape-attr) #{shape-attr})))
 
 (defn token-attr->shape-attr
   [token-attr]

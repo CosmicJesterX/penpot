@@ -15,8 +15,8 @@
    [app.common.types.tokens-lib :as ctob]
    [app.config :as cf]
    [app.main.data.helpers :as dsh]
+   [app.main.data.workspace.tokens.selected-set :as dwts]
    [app.main.store :as st]
-   [app.main.ui.workspace.tokens.token-set :as wtts]
    [okulary.core :as l]))
 
 ;; ---- Global refs
@@ -83,10 +83,32 @@
   files (without the content, only summary)"
   (l/derived :shared-files st/state))
 
+(defn select-libraries
+  [files file-id]
+  (persistent!
+   (reduce-kv (fn [result id file]
+                (if (or (= id file-id)
+                        (= (:library-of file) file-id))
+                  (assoc! result id file)
+                  result))
+              (transient {})
+              files)))
+
+;; NOTE: for performance reasons, prefer derefing refs/files and then
+;; use with-memo mechanism with `select-libraries` this will avoid
+;; executing the select-libraries reduce-kv on each state change and
+;; only execute it when files are changed. This ref exists for
+;; backward compatibility with the code, but it is considered
+;; DEPRECATED and all new code should not use it and old code should
+;; be gradually migrated to more efficient approach
 (def libraries
-  "A derived state that contanins the currently loaded shared libraries
-  with all its content; including the current file"
-  (l/derived :files st/state))
+  "A derived state that contanins the currently loaded shared
+  libraries with all its content; including the current file"
+  (l/derived (fn [state]
+               (let [files   (get state :files)
+                     file-id (get state :current-file-id)]
+                 (select-libraries files file-id)))
+             st/state))
 
 (defn extract-selected-files
   [files selected]
@@ -125,6 +147,13 @@
 (def workspace-drawing
   (l/derived :workspace-drawing st/state))
 
+(def workspace-selrect-transform
+  (l/derived :workspace-selrect-transform st/state))
+
+(def workspace-tokens
+  "All tokens related ephimeral state"
+  (l/derived :workspace-tokens st/state))
+
 ;; TODO: rename to workspace-selected (?)
 ;; Don't use directly from components, this is a proxy to improve performance of selected-shapes
 (def ^:private selected-shapes-data
@@ -141,7 +170,7 @@
   (l/derived
    (fn [{:keys [objects selected]}]
      (dsh/process-selected-shapes objects selected))
-   selected-shapes-data))
+   selected-shapes-data =))
 
 (defn make-selected-ref
   [id]
@@ -450,11 +479,8 @@
 (def workspace-token-themes-no-hidden
   (l/derived #(remove ctob/hidden-temporary-theme? %) workspace-token-themes))
 
-(def workspace-selected-token-set-path
-  (l/derived wtts/get-selected-token-set-path st/state))
-
-(def workspace-token-set-group-selected?
-  (l/derived wtts/token-group-selected? st/state))
+(def selected-token-set-name
+  (l/derived (l/key :selected-token-set-name) workspace-tokens))
 
 (def workspace-ordered-token-sets
   (l/derived #(or (some-> % ctob/get-sets) []) tokens-lib))
@@ -466,31 +492,28 @@
   (l/derived (d/nilf ctob/get-active-theme-paths) tokens-lib))
 
 (defn token-sets-at-path-all-active
-  [prefixed-path]
+  [group-path]
   (l/derived
    (fn [lib]
      (when lib
-       (ctob/sets-at-path-all-active? lib prefixed-path)))
+       (ctob/sets-at-path-all-active? lib group-path)))
    tokens-lib))
 
 (def workspace-active-theme-paths-no-hidden
   (l/derived #(disj % ctob/hidden-token-theme-path) workspace-active-theme-paths))
 
-(def workspace-active-set-names
-  (l/derived (d/nilf ctob/get-active-themes-set-names) tokens-lib))
-
+;; FIXME: deprecated, it should not be implemented with ref (still used in form)
 (def workspace-active-theme-sets-tokens
   (l/derived #(or (some-> % ctob/get-active-themes-set-tokens) {}) tokens-lib))
 
 (def workspace-selected-token-set-token
   (fn [token-name]
     (l/derived
-     #(some-> (wtts/get-selected-token-set %)
-              (ctob/get-token token-name))
+     #(dwts/get-selected-token-set-token % token-name)
      st/state)))
 
 (def workspace-selected-token-set-tokens
-  (l/derived #(or (wtts/get-selected-token-set-tokens %) {}) st/state))
+  (l/derived #(or (dwts/get-selected-token-set-tokens %) {}) st/state))
 
 (def plugins-permissions-peek
   (l/derived (fn [state]

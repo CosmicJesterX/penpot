@@ -9,6 +9,7 @@
   (:require
    [app.binfile.common :as bfc]
    [app.binfile.v1 :as bf.v1]
+   [app.binfile.v3 :as bf.v3]
    [app.common.exceptions :as ex]
    [app.common.features :as cfeat]
    [app.common.schema :as sm]
@@ -25,6 +26,7 @@
    [app.rpc.doc :as-alias doc]
    [app.setup :as-alias setup]
    [app.setup.templates :as tmpl]
+   [app.storage.tmp :as tmp]
    [app.util.services :as sv]
    [app.util.time :as dt]
    [app.worker :as-alias wrk]
@@ -54,8 +56,8 @@
     (vswap! bfc/*state* update :index bfc/update-index fmeds :id)
 
     ;; Process and persist file
-    (let [file (->> (bfc/process-file file)
-                    (bfc/persist-file! cfg))]
+    (let [file (bfc/process-file file)]
+      (bfc/insert-file! cfg file ::db/return-keys false)
 
       ;; The file profile creation is optional, so when no profile is
       ;; present (when this function is called from profile less
@@ -67,7 +69,7 @@
                      :is-owner true
                      :is-admin true
                      :can-edit true}
-                    {::db/return-keys? false}))
+                    {::db/return-keys false}))
 
       (doseq [params (sequence (comp
                                 (map #(bfc/remap-id % :file-id))
@@ -394,32 +396,49 @@
 ;; --- COMMAND: Clone Template
 
 (defn clone-template
-  [cfg {:keys [project-id profile-id] :as params} template]
-  (db/tx-run! cfg (fn [{:keys [::db/conn ::wrk/executor] :as cfg}]
-                    ;; NOTE: the importation process performs some operations
-                    ;; that are not very friendly with virtual threads, and for
-                    ;; avoid unexpected blocking of other concurrent operations
-                    ;; we dispatch that operation to a dedicated executor.
-                    (let [cfg    (-> cfg
-                                     (assoc ::bf.v1/project-id project-id)
-                                     (assoc ::bf.v1/profile-id profile-id)
-                                     (assoc ::bf.v1/input template))
-                          result (px/invoke! executor (partial bf.v1/import-files! cfg))]
+  [{:keys [::db/pool ::wrk/executor] :as cfg} {:keys [project-id profile-id] :as params} template]
 
-                      (db/update! conn :project
-                                  {:modified-at (dt/now)}
-                                  {:id project-id})
+  ;; NOTE: the importation process performs some operations
+  ;; that are not very friendly with virtual threads, and for
+  ;; avoid unexpected blocking of other concurrent operations
+  ;; we dispatch that operation to a dedicated executor.
+  (let [template (tmp/tempfile-from template
+                                    :prefix "penpot.template."
+                                    :suffix ""
+                                    :min-age "30m")
 
-                      (let [props (audit/clean-props params)]
-                        (doseq [file-id result]
-                          (let [props (assoc props :id file-id)
-                                event (-> (audit/event-from-rpc-params params)
-                                          (assoc ::audit/profile-id profile-id)
-                                          (assoc ::audit/name "create-file")
-                                          (assoc ::audit/props props))]
-                            (audit/submit! cfg event))))
+        format   (bfc/parse-file-format template)
+        team     (teams/get-team pool
+                                 :profile-id profile-id
+                                 :project-id project-id)
 
-                      result))))
+        cfg      (-> cfg
+                     (assoc ::bfc/project-id project-id)
+                     (assoc ::bfc/profile-id profile-id)
+                     (assoc ::bfc/input template)
+                     (assoc ::bfc/features (cfeat/get-team-enabled-features cf/flags team)))
+
+        result   (if (= format :binfile-v3)
+                   (px/invoke! executor (partial bf.v3/import-files! cfg))
+                   (px/invoke! executor (partial bf.v1/import-files! cfg)))]
+
+    (db/tx-run! cfg
+                (fn [{:keys [::db/conn] :as cfg}]
+                  (db/update! conn :project
+                              {:modified-at (dt/now)}
+                              {:id project-id}
+                              {::db/return-keys false})
+
+                  (let [props (audit/clean-props params)]
+                    (doseq [file-id result]
+                      (let [props (assoc props :id file-id)
+                            event (-> (audit/event-from-rpc-params params)
+                                      (assoc ::audit/profile-id profile-id)
+                                      (assoc ::audit/name "create-file")
+                                      (assoc ::audit/props props))]
+                        (audit/submit! cfg event))))))
+
+    result))
 
 (def ^:private
   schema:clone-template

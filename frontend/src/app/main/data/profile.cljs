@@ -14,11 +14,12 @@
    [app.config :as cf]
    [app.main.data.event :as ev]
    [app.main.data.media :as di]
+   [app.main.data.notifications :as ntf]
    [app.main.data.team :as-alias dtm]
    [app.main.repo :as rp]
    [app.main.router :as rt]
    [app.plugins.register :as plugins.register]
-   [app.util.i18n :as i18n]
+   [app.util.i18n :as i18n :refer [tr]]
    [app.util.storage :as storage]
    [beicon.v2.core :as rx]
    [potok.v2.core :as ptk]))
@@ -72,6 +73,7 @@
 (def profile-fetched?
   (ptk/type? ::profile-fetched))
 
+;; FIXME: make it as general purpose handler, not only on profile
 (defn- on-fetch-profile-exception
   [cause]
   (let [data (ex-data cause)]
@@ -238,25 +240,24 @@
    [:email-comments [::sm/one-of #{:all :partial :none}]]
    [:email-invites [::sm/one-of #{:all :none}]]])
 
+(def ^:private check-update-notifications-params
+  (sm/check-fn schema:update-notifications))
+
 (defn update-notifications
   [data]
-  (dm/assert!
-   "expected valid parameters"
-   (sm/check schema:update-notifications data))
-
+  (assert (check-update-notifications-params data))
   (ptk/reify ::update-notifications
     ev/Event
     (-data [_] {})
 
+    ptk/UpdateEvent
+    (update [_ state]
+      (update-in state [:profile :props] assoc :notifications data))
+
     ptk/WatchEvent
     (watch [_ _ _]
-      (let [{:keys [on-error on-success]
-             :or {on-error identity
-                  on-success identity}} (meta data)]
-        (->> (rp/cmd! :update-profile-notifications data)
-             (rx/tap on-success)
-             (rx/catch #(do (on-error %) (rx/empty)))
-             (rx/ignore))))))
+      (->> (rp/cmd! :update-profile-notifications data)
+           (rx/map #(ntf/success (tr "dashboard.notifications.notifications-saved")))))))
 
 (defn update-profile-props
   [props]

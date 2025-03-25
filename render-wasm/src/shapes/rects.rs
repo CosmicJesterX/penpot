@@ -1,6 +1,6 @@
-use crate::math::Point;
+use super::Corners;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Rect {
-  
+    pub corners: Option<Corners>,
 }

@@ -102,6 +102,7 @@
           current-icon (:icon selected-option)
           current-icon-ref (i/key->icon current-icon)]
       [:div {:on-click open-dropdown
+             :role "combobox"
              :class (dm/str (stl/css-case :custom-select true
                                           :disabled disabled
                                           :icon (some? current-icon-ref))
@@ -116,11 +117,13 @@
          (for [[index item] (d/enumerate options)]
            (if (= :separator item)
              [:li {:class (dom/classnames (stl/css :separator) true)
+                   :role "option"
                    :key (dm/str current-id "-" index)}]
              (let [[value label icon] (as-key-value item)
                    icon-ref (i/key->icon icon)]
                [:li
                 {:key (dm/str current-id "-" index)
+                 :role "option"
                  :class (stl/css-case
                          :checked-element true
                          :disabled (:disabled item)

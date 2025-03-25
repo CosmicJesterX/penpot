@@ -347,11 +347,14 @@
   Clone the shapes of the component, generating new names and ids, and
   linking each new shape to the corresponding one of the
   component. Place the new instance coordinates in the given
-  position."
-  ([container component library-data position components-v2]
-   (make-component-instance container component library-data position components-v2 {}))
+  position.
 
-  ([container component library-data position components-v2
+  WARNING: This process does not remap media references (on fills, strokes, ...); that is
+  delegated to an async process on the backend side that checks unreferenced shapes and
+  automatically creates correct references."
+  ([page component library-data position components-v2]
+   (make-component-instance page component library-data position components-v2 {}))
+  ([page component library-data position components-v2
     {:keys [main-instance? force-id force-frame-id keep-ids?]
      :or {main-instance? false force-id nil force-frame-id nil keep-ids? false}}]
    (let [component-page  (when components-v2
@@ -367,7 +370,7 @@
          orig-pos        (gpt/point (:x component-shape) (:y component-shape))
          delta           (gpt/subtract position orig-pos)
 
-         objects         (:objects container)
+         objects         (:objects page)
          unames          (volatile! (cfh/get-used-names objects))
 
          component-children
@@ -384,7 +387,7 @@
                                                                           (nil? (get component-children (:id %)))
                                                                           ;; We must avoid that destiny frame is inside a copy
                                                                           (not (ctk/in-component-copy? %)))}))
-         frame           (get-shape container frame-id)
+         frame           (get-shape page frame-id)
          component-frame (get-component-shape objects frame {:allow-main? true})
 
          ids-map         (volatile! {})
@@ -403,7 +406,7 @@
              (cond-> new-shape
                :always
                (-> (gsh/move delta)
-                   (dissoc :touched))
+                   (dissoc :touched :variant-id :variant-name))
 
                (and main-instance? root?)
                (assoc :main-instance true)
@@ -437,7 +440,7 @@
                            :force-id force-id
                            :keep-ids? keep-ids?
                            :frame-id frame-id
-                           :dest-objects (:objects container))
+                           :dest-objects (:objects page))
 
          ;; Fix empty parent-id and remap all grid cells to the new ids.
          remap-ids
@@ -498,7 +501,12 @@
 (defn- invalid-structure-for-component?
   "Check if the structure generated nesting children in parent is invalid in terms of nested components"
   [objects parent children pasting? libraries]
-  (let [; When we are pasting, the main shapes will be pasted as copies, unless the
+  (let [; If the original shapes had been cutted, and we are pasting them now, they aren't
+        ; in objects. We can add them to locate later
+        objects (merge objects
+                       (into {} (map (juxt :id identity) children)))
+
+        ; When we are pasting, the main shapes will be pasted as copies, unless the
         ; original component doesn't exist or is deleted. So for this function purposes, they
         ; are removed from the list
         remove? (fn [shape]
@@ -532,10 +540,17 @@
    (letfn [(get-frame [parent-id]
              (if (cfh/frame-shape? objects parent-id) parent-id (get-in objects [parent-id :frame-id])))]
      (let [parent (get objects parent-id)
-          ;; We can always move the children to the parent they already have
+           ;; We can always move the children to the parent they already have.
+           ;; But if we are pasting, those are new items, so it is considered a change
            no-changes?
-           (->> children (every? #(= parent-id (:parent-id %))))]
-       (if (or no-changes? (not (invalid-structure-for-component? objects parent children pasting? libraries)))
+           (and (->> children (every? #(= parent-id (:parent-id %))))
+                (not pasting?))
+           all-main?
+           (->> children (every? #(ctk/main-instance? %)))]
+       (if (or no-changes?
+               (and (not (invalid-structure-for-component? objects parent children pasting? libraries))
+                    ;; If we are moving into a variant-container, all the items should be main
+                    (or all-main? (not (ctk/is-variant-container? parent)))))
          [parent-id (get-frame parent-id)]
          (recur (:parent-id parent) objects children pasting? libraries))))))
 

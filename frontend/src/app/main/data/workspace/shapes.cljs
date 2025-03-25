@@ -13,6 +13,7 @@
    [app.common.files.shapes-helpers :as cfsh]
    [app.common.logic.shapes :as cls]
    [app.common.schema :as sm]
+   [app.common.types.component :as ctc]
    [app.common.types.container :as ctn]
    [app.common.types.shape :as cts]
    [app.common.types.shape-tree :as ctst]
@@ -47,14 +48,11 @@
 
 (defn update-shapes
   ([ids update-fn] (update-shapes ids update-fn nil))
-  ([ids update-fn {:keys [reg-objects? save-undo? stack-undo? attrs ignore-tree page-id ignore-touched undo-group with-objects?]
+  ([ids update-fn {:keys [reg-objects? save-undo? stack-undo? attrs ignore-tree page-id ignore-touched undo-group with-objects? changed-sub-attr]
                    :or {reg-objects? false save-undo? true stack-undo? false ignore-touched false with-objects? false}}]
 
-   (dm/assert!
-    "expected a valid coll of uuid's"
-    (sm/check-coll-of-uuid! ids))
-
-   (dm/assert! (fn? update-fn))
+   (assert (sm/check-coll-of-uuid ids))
+   (assert (fn? update-fn))
 
    (ptk/reify ::update-shapes
      ptk/WatchEvent
@@ -76,6 +74,7 @@
                                                      update-fn
                                                      objects
                                                      {:attrs attrs
+                                                      :changed-sub-attr changed-sub-attr
                                                       :ignore-tree ignore-tree
                                                       :ignore-touched ignore-touched
                                                       :with-objects? with-objects?})
@@ -148,7 +147,7 @@
             changes (-> (pcb/empty-changes it page-id)
                         (pcb/with-objects objects))
 
-            changes (cfsh/prepare-move-shapes-into-frame changes frame-id shapes objects)]
+            changes (cfsh/prepare-move-shapes-into-frame changes frame-id shapes objects true)]
 
         (if (some? changes)
           (rx/of (dch/commit-changes changes))
@@ -160,9 +159,7 @@
   ([ids] (delete-shapes nil ids {}))
   ([page-id ids] (delete-shapes page-id ids {}))
   ([page-id ids options]
-   (dm/assert!
-    "expected a valid set of uuid's"
-    (sm/check-set-of-uuid! ids))
+   (assert (sm/check-set-of-uuid ids))
 
    (ptk/reify ::delete-shapes
      ptk/WatchEvent
@@ -247,7 +244,10 @@
              objects      (dsh/lookup-page-objects state page-id)
              selected     (->> (dsh/lookup-selected state)
                                (cfh/clean-loops objects)
-                               (remove #(ctn/has-any-copy-parent? objects (get objects %))))
+                               (remove #(ctn/has-any-copy-parent? objects (get objects %)))
+                               (remove #(->> %
+                                             (get objects)
+                                             (ctc/is-variant?))))
 
              changes      (-> (pcb/empty-changes it page-id)
                               (pcb/with-objects objects))

@@ -34,12 +34,14 @@
   (assoc component :modified-at (dt/now)))
 
 (defn add-component
-  [fdata {:keys [id name path main-instance-id main-instance-page shapes annotation]}]
+  [fdata {:keys [id name path main-instance-id main-instance-page shapes annotation variant-id variant-properties]}]
   (let [components-v2  (dm/get-in fdata [:options :components-v2])
         fdata          (update fdata :components assoc id (touch {:id id :name name :path path}))]
     (if components-v2
       (cond-> (update-in fdata [:components id] assoc :main-instance-id main-instance-id :main-instance-page main-instance-page)
-        annotation (update-in [:components id] assoc :annotation annotation))
+        annotation (update-in [:components id] assoc :annotation annotation)
+        variant-id (update-in [:components id] assoc :variant-id variant-id)
+        variant-properties (update-in [:components id] assoc :variant-properties variant-properties))
 
       (let [wrap-object-fn cfeat/*wrap-with-objects-map-fn*]
         (assoc-in fdata [:components id :objects]
@@ -48,7 +50,7 @@
                        (wrap-object-fn)))))))
 
 (defn mod-component
-  [file-data {:keys [id name path main-instance-id main-instance-page objects annotation modified-at]}]
+  [file-data {:keys [id name path main-instance-id main-instance-page objects annotation variant-id variant-properties modified-at]}]
   (let [wrap-objects-fn cfeat/*wrap-with-objects-map-fn*]
     (d/update-in-when file-data [:components id]
                       (fn [component]
@@ -76,10 +78,22 @@
                                          (assoc :annotation annotation)
 
                                          (nil? annotation)
-                                         (dissoc :annotation))
+                                         (dissoc :annotation)
+
+                                         (some? variant-id)
+                                         (assoc :variant-id variant-id)
+
+                                         (nil? variant-id)
+                                         (dissoc :variant-id)
+
+                                         (some? variant-properties)
+                                         (assoc :variant-properties variant-properties)
+
+                                         (nil? variant-properties)
+                                         (dissoc :variant-properties))
                               diff     (set/difference
                                         (ctk/diff-components component new-comp)
-                                        #{:annotation :modified-at})] ;; The set of properties that doesn't mark a component as touched
+                                        #{:annotation :modified-at :variant-id :variant-properties})] ;; The set of properties that doesn't mark a component as touched
 
                           (if (empty? diff)
                             new-comp

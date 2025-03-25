@@ -121,7 +121,15 @@
         (mf/use-fn
          (fn [event]
            (dom/blur! (dom/get-target event))
-           (st/emit! (dwc/toggle-toolbar-visibility))))]
+           (st/emit! (dwc/toggle-toolbar-visibility))))
+
+        profile (mf/deref refs/profile)
+        props   (get profile :props)
+        test-tooltip-board-text
+        (if (and (cf/external-feature-flag "boards-03" "test")
+                 (not (:workspace-visited props)))
+          (tr "workspace.toolbar.frame-first-time" (sc/get-tooltip :draw-frame))
+          (tr "workspace.toolbar.frame" (sc/get-tooltip :draw-frame)))]
 
     (when-not ^boolean read-only?
       [:aside {:class (stl/css-case :main-toolbar true
@@ -141,13 +149,13 @@
         [:*
          [:li
           [:button
-           {:title (tr "workspace.toolbar.frame" (sc/get-tooltip :draw-frame))
+           {:title test-tooltip-board-text
             :aria-label (tr "workspace.toolbar.frame" (sc/get-tooltip :draw-frame))
             :class  (stl/css-case :main-toolbar-options-button true :selected (= selected-drawtool :frame))
             :on-click select-drawtool
             :data-tool "frame"
             :data-testid "artboard-btn"}
-           (if (cf/external-feature-flag "boards-01" "test") i/board-2 i/board)]]
+           i/board]]
          [:li
           [:button
            {:title (tr "workspace.toolbar.rect" (sc/get-tooltip :draw-rect))
@@ -203,7 +211,8 @@
               :aria-label (tr "workspace.toolbar.plugins" (sc/get-tooltip :plugins))
               :class (stl/css :main-toolbar-options-button)
               :on-click #(st/emit!
-                          (ptk/event ::ev/event {::ev/name "open-plugins-manager" ::ev/origin "workspace:toolbar"})
+                          (ptk/data-event ::ev/event {::ev/name "open-plugins-manager"
+                                                      ::ev/origin "workspace:toolbar"})
                           (modal/show :plugin-management {}))
               :data-tool "plugins"
               :data-testid "plugins-btn"}

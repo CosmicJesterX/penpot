@@ -128,18 +128,19 @@
 ;;   image?: ImageData;
 ;; }
 (defn format-color
-  [{:keys [id name path color opacity ref-id ref-file gradient image] :as color-data}]
+  [{:keys [id file-id name path color opacity ref-id ref-file gradient image] :as color-data}]
   (when (some? color-data)
-    (obj/without-empty
-     #js {:id (format-id id)
-          :name name
-          :path path
-          :color color
-          :opacity opacity
-          :refId (format-id ref-id)
-          :refFile (format-id ref-file)
-          :gradient (format-gradient gradient)
-          :image (format-image image)})))
+    (let [id (or (format-id id) (format-id ref-id))
+          file-id (or (format-id file-id) (format-id ref-file))]
+      (obj/without-empty
+       #js {:id (or (format-id id) (format-id ref-id))
+            :fileId (or (format-id file-id) (format-id ref-file))
+            :name name
+            :path path
+            :color color
+            :opacity opacity
+            :gradient (format-gradient gradient)
+            :image (format-image image)}))))
 
 ;; Color & ColorShapeInfo
 (defn format-color-result
@@ -175,8 +176,9 @@
 
 (defn format-shadows
   [shadows]
-  (when (some? shadows)
-    (format-array format-shadow shadows)))
+  (if (some? shadows)
+    (format-array format-shadow shadows)
+    (array)))
 
 ;;export interface Fill {
 ;;  fillColor?: string;
@@ -260,7 +262,7 @@
           :hidden hidden})))
 
 ;; export interface Export {
-;;   type: 'png' | 'jpeg' | 'svg' | 'pdf';
+;;   type: 'png' | 'jpeg' | 'webp' | 'svg' | 'pdf';
 ;;   scale: number;
 ;;   suffix: string;
 ;; }

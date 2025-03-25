@@ -11,6 +11,7 @@
    [app.common.data.macros :as dm]
    [app.common.files.helpers :as cfh]
    [app.common.media :as cm]
+   [app.common.types.component :as ctc]
    [app.common.types.file :as ctf]
    [app.main.data.event :as ev]
    [app.main.data.modal :as modal]
@@ -44,7 +45,7 @@
 
 (defn- get-component-root-and-container
   [file-id component]
-  (let [data       (dm/get-in @refs/libraries [file-id :data])
+  (let [data       (dm/get-in @refs/files [file-id :data])
         root-shape (ctf/get-component-root data component)
         container  (ctf/get-component-page data component)]
     [root-shape container]))
@@ -71,17 +72,13 @@
         [root-shape container]
         (get-component-root-and-container file-id component)
 
-        unselect-all
-        (mf/use-fn
-         (fn []
-           (st/emit! (dw/unselect-all-assets))))
-
         on-component-click
         (mf/use-fn
          (mf/deps component-id on-asset-click)
          (fn [event]
            (dom/stop-propagation event)
-           (on-asset-click component-id unselect-all event)))
+           (when-not (on-asset-click event component-id)
+             (st/emit! (dw/unselect-all-assets)))))
 
         on-component-double-click
         (mf/use-fn
@@ -162,13 +159,14 @@
          (when ^boolean dragging?
            [:div {:class (stl/css :dragging)}])]
 
-        [:& cmm/component-item-thumbnail {:file-id file-id
-                                          :class (stl/css-case :thumbnail true
-                                                               :asset-list-thumbnail (not listing-thumbs?))
-                                          :root-shape root-shape
-                                          :component component
-                                          :container container
-                                          :is-hidden (not visible?)}]])]))
+        [:> cmm/component-item-thumbnail*
+         {:file-id file-id
+          :class (stl/css-case :thumbnail true
+                               :asset-list-thumbnail (not listing-thumbs?))
+          :root-shape root-shape
+          :component component
+          :container container
+          :is-hidden (not visible?)}]])]))
 
 (mf/defc components-group
   {::mf/wrap-props false}
@@ -315,6 +313,14 @@
                                      (seq (:colors selected))
                                      (seq (:typographies selected)))
 
+        any-variant?             (mf/with-memo [selected components current-component-id]
+                                   (let [selected-and-current (-> (d/nilv selected [])
+                                                                  (conj current-component-id)
+                                                                  set)]
+                                     (->> components
+                                          (filter #(contains? selected-and-current (:id %)))
+                                          (some ctc/is-variant?))))
+
         groups                   (mf/with-memo [components reverse-sort?]
                                    (grp/group-assets components reverse-sort?))
 
@@ -457,7 +463,7 @@
          (fn [component event]
 
            (let [file-data
-                 (dm/get-in @refs/libraries [file-id :data])
+                 (dm/get-in @refs/files [file-id :data])
 
                  shape-main
                  (ctf/get-component-root file-data component)]
@@ -538,7 +544,7 @@
                               :on-ungroup on-ungroup
                               :on-context-menu on-context-menu
                               :selected-full selected-full
-                              :local ^boolean is-local}])
+                              :is-local ^boolean is-local}])
 
       [:& cmm/assets-context-menu
        {:on-close on-close-menu
@@ -547,7 +553,7 @@
                     {:name    (tr "workspace.assets.rename")
                      :id      "assets-rename-component"
                      :handler on-rename})
-                  (when (and is-local (not (or multi-assets? read-only?)))
+                  (when (and is-local (not (or multi-assets? read-only? any-variant?)))
                     {:name    (if components-v2
                                 (tr "workspace.assets.duplicate-main")
                                 (tr "workspace.assets.duplicate"))
@@ -558,7 +564,7 @@
                     {:name    (tr "workspace.assets.delete")
                      :id      "assets-delete-component"
                      :handler on-delete})
-                  (when (and is-local (not (or multi-assets? read-only?)))
+                  (when (and is-local (not (or multi-assets? read-only? any-variant?)))
                     {:name   (tr "workspace.assets.group")
                      :id     "assets-group-component"
                      :handler on-group})

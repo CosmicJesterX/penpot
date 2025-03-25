@@ -42,12 +42,19 @@
 
 (mf/defc token-update-create-modal
   {::mf/wrap-props false}
-  [{:keys [x y position token token-type action selected-token-set-path] :as _args}]
+  [{:keys [x y position token token-type action selected-token-set-name] :as _args}]
   (let [wrapper-style (use-viewport-position-style x y position)
+        modal-size-large* (mf/use-state false)
+        modal-size-large? (deref modal-size-large*)
         close-modal (mf/use-fn
                      (fn []
-                       (modal/hide!)))]
-    [:div {:class (stl/css :token-modal-wrapper)
+                       (modal/hide!)))
+        update-modal-size (mf/use-fn
+                           (fn [visible]
+                             (reset! modal-size-large* visible)))]
+    [:div {:class (stl/css-case
+                   :token-modal-wrapper true
+                   :token-modal-large modal-size-large?)
            :style wrapper-style
            :data-testid "token-update-create-modal"}
      [:> icon-button* {:on-click close-modal
@@ -57,8 +64,9 @@
                        :aria-label (tr "labels.close")}]
      [:& form {:token token
                :action action
-               :selected-token-set-path selected-token-set-path
-               :token-type token-type}]]))
+               :selected-token-set-name selected-token-set-name
+               :token-type token-type
+               :on-display-colorpicker update-modal-size}]]))
 
 ;; Modals ----------------------------------------------------------------------
 

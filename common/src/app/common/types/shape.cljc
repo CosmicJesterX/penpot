@@ -32,6 +32,7 @@
    [app.common.types.shape.shadow :as ctss]
    [app.common.types.shape.text :as ctsx]
    [app.common.types.token :as cto]
+   [app.common.types.variant :as ctv]
    [app.common.uuid :as uuid]
    [clojure.set :as set]))
 
@@ -148,7 +149,7 @@
 
 (sm/register! ::stroke schema:stroke)
 
-(def check-stroke!
+(def check-stroke
   (sm/check-fn schema:stroke))
 
 (def schema:shape-base-attrs
@@ -317,7 +318,9 @@
       schema:frame-attrs
       schema:shape-attrs
       schema:shape-geom-attrs
-      schema:shape-base-attrs]]
+      schema:shape-base-attrs
+      ::ctv/variant-shape
+      ::ctv/variant-container]]
 
     [:bool
      [:merge {:title "BoolShape"}
@@ -588,51 +591,51 @@
 ;;  - Blur
 ;;  - Border radius
 (def ^:private basic-extract-props
-  [:fills
-   :strokes
-   :opacity
+  #{:fills
+    :strokes
+    :opacity
 
-   ;; Layout Item
-   :layout-item-margin
-   :layout-item-margin-type
-   :layout-item-h-sizing
-   :layout-item-v-sizing
-   :layout-item-max-h
-   :layout-item-min-h
-   :layout-item-max-w
-   :layout-item-min-w
-   :layout-item-absolute
-   :layout-item-z-index
+    ;; Layout Item
+    :layout-item-margin
+    :layout-item-margin-type
+    :layout-item-h-sizing
+    :layout-item-v-sizing
+    :layout-item-max-h
+    :layout-item-min-h
+    :layout-item-max-w
+    :layout-item-min-w
+    :layout-item-absolute
+    :layout-item-z-index
 
-   ;; Constraints
-   :constraints-h
-   :constraints-v
+    ;; Constraints
+    :constraints-h
+    :constraints-v
 
-   :shadow
-   :blur
+    :shadow
+    :blur
 
-   ;; Radius
-   :r1
-   :r2
-   :r3
-   :r4])
+    ;; Radius
+    :r1
+    :r2
+    :r3
+    :r4})
 
 (def ^:private layout-extract-props
-  [:layout
-   :layout-flex-dir
-   :layout-gap-type
-   :layout-gap
-   :layout-wrap-type
-   :layout-align-items
-   :layout-align-content
-   :layout-justify-items
-   :layout-justify-content
-   :layout-padding-type
-   :layout-padding
-   :layout-grid-dir
-   :layout-grid-rows
-   :layout-grid-columns
-   :layout-grid-cells])
+  #{:layout
+    :layout-flex-dir
+    :layout-gap-type
+    :layout-gap
+    :layout-wrap-type
+    :layout-align-items
+    :layout-align-content
+    :layout-justify-items
+    :layout-justify-content
+    :layout-padding-type
+    :layout-padding
+    :layout-grid-dir
+    :layout-grid-rows
+    :layout-grid-columns
+    :layout-grid-cells})
 
 (defn extract-props
   "Retrieves an object with the 'pasteable' properties for a shape."
@@ -668,10 +671,13 @@
             [props shape]
             (d/patch-object props (select-keys shape layout-extract-props)))]
 
-    (-> shape
-        (select-keys basic-extract-props)
-        (cond-> (cfh/text-shape? shape) (extract-text-props shape))
-        (cond-> (ctsl/any-layout? shape) (extract-layout-props shape)))))
+    (let [;; For texts we don't extract the fill
+          extract-props
+          (cond-> basic-extract-props (cfh/text-shape? shape) (disj :fills))]
+      (-> shape
+          (select-keys extract-props)
+          (cond-> (cfh/text-shape? shape) (extract-text-props shape))
+          (cond-> (ctsl/any-layout? shape) (extract-layout-props shape))))))
 
 (defn patch-props
   "Given the object of `extract-props` applies it to a shape. Adapt the shape if necesary"

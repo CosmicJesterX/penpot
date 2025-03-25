@@ -4,6 +4,9 @@
 //
 // Copyright (c) KALEIDOS INC
 
+@use "../../../ds/typography.scss" as t;
+@use "../../../ds/_sizes.scss" as *;
+
 @import "refactor/common-refactor.scss";
 
 .modal-overlay {
@@ -13,11 +16,9 @@
 .modal-dialog {
   @extend .modal-container-base;
 
-  display: flex;
-  flex-direction: column;
   width: 100%;
   max-width: $s-512;
-  max-height: $s-720;
+  max-height: unset;
   user-select: none;
 }
 
@@ -31,19 +32,22 @@
 }
 
 .themes-modal-wrapper {
-  display: flex;
-  flex-direction: column;
-  gap: $s-24;
-  overflow: auto;
+  display: grid;
+  grid-template-rows: 0fr minmax(0, 1fr);
+  gap: $s-16;
+  max-height: $s-688;
 }
 
 .edit-theme-form {
   display: flex;
-  overflow-y: auto;
 }
 
 .themes-modal-title {
   color: var(--color-foreground-primary);
+}
+
+.themes-modal-description {
+  color: var(--color-foreground-secondary);
 }
 
 .back-btn {
@@ -60,10 +64,6 @@
   &:hover {
     color: var(--color-accent-primary);
   }
-}
-
-.labeled-input-label {
-  color: var(--color-foreground-primary);
 }
 
 .button-footer {
@@ -130,6 +130,7 @@
 .theme-group-wrapper {
   display: flex;
   flex-direction: column;
+  margin-block-start: $s-6;
   overflow-y: auto;
   gap: $s-32;
 }
@@ -166,16 +167,18 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  text-transform: lowercase;
 }
 
 .edit-theme-wrapper {
   display: flex;
   flex-direction: column;
   gap: $s-24;
+  inline-size: 100%;
 }
 
 .sets-list-wrapper {
-  border: 1px solid color-mix(in hsl, var(--color-foreground-secondary) 30%, transparent);
+  border: $s-1 solid color-mix(in hsl, var(--color-foreground-secondary) 30%, transparent);
   border-radius: $s-8;
   overflow-y: auto;
 }
@@ -199,11 +202,18 @@
   gap: $s-12;
 }
 
-.group-drop-down-button {
-  @include buttonStyle;
+.label {
+  @include t.use-typography("body-small");
+  @include textEllipsis;
+}
+
+.main-label {
+  @include t.use-typography("body-small");
+  color: var(--color-foreground-primary);
+}
+
+.label-optional {
+  @include t.use-typography("body-small");
+  margin-inline-start: 1ex;
   color: var(--color-foreground-secondary);
-  width: $s-24;
-  height: 100%;
-  padding: 0;
-  margin: 0 $s-6;
 }

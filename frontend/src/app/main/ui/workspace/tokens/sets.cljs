@@ -9,362 +9,573 @@
   (:require
    [app.common.data.macros :as dm]
    [app.common.types.tokens-lib :as ctob]
-   [app.main.data.tokens :as wdt]
+   [app.main.data.event :as ev]
+   [app.main.data.tokens :as dt]
    [app.main.refs :as refs]
    [app.main.store :as st]
+   [app.main.ui.context :as ctx]
    [app.main.ui.ds.buttons.icon-button :refer [icon-button*]]
    [app.main.ui.ds.foundations.assets.icon :refer [icon*] :as ic]
    [app.main.ui.ds.foundations.typography.text :refer [text*]]
-   [app.main.ui.workspace.tokens.sets-context :as sets-context]
+   [app.main.ui.hooks :as h]
    [app.util.dom :as dom]
    [app.util.i18n :refer [tr]]
    [app.util.keyboard :as kbd]
    [cuerdas.core :as str]
+   [potok.v2.core :as ptk]
    [rumext.v2 :as mf]))
 
-(defn on-toggle-token-set-click [token-set-name]
-  (st/emit! (wdt/toggle-token-set {:token-set-name token-set-name})))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; HELPERS
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defn on-toggle-token-set-group-click [prefixed-path-str]
-  (st/emit! (wdt/toggle-token-set-group {:prefixed-path-str prefixed-path-str})))
+(defn- on-start-creation
+  []
+  (st/emit! (dt/start-token-set-creation [])))
 
-(defn on-select-token-set-click [tree-path]
-  (st/emit! (wdt/set-selected-token-set-path tree-path)))
+(defn- on-toggle-token-set-click [name]
+  (st/emit! (dt/toggle-token-set name)))
 
-(defn on-update-token-set [set-name token-set]
-  (st/emit! (wdt/update-token-set set-name token-set)))
+(defn- on-toggle-token-set-group-click [path]
+  (st/emit! (dt/toggle-token-set-group path)))
 
-(defn on-update-token-set-group [from-prefixed-path-str to-path-str]
-  (st/emit!
-   (wdt/rename-token-set-group
-    (ctob/prefixed-set-path-string->set-name-string from-prefixed-path-str)
-    (-> (ctob/prefixed-set-path-string->set-path from-prefixed-path-str)
-        (butlast)
-        (ctob/join-set-path)
-        (ctob/join-set-path-str to-path-str)))))
+(defn- on-select-token-set-click [name]
+  (st/emit! (dt/set-selected-token-set-name name)))
 
-(defn on-create-token-set [_ token-set]
-  (st/emit! (wdt/create-token-set token-set)))
+(defn on-update-token-set
+  [token-set name]
+  (st/emit! (dt/clear-token-set-edition)
+            (dt/update-token-set token-set name)))
 
-(mf/defc editing-label
+(defn- on-update-token-set-group
+  [path name]
+  (st/emit! (dt/clear-token-set-edition)
+            (dt/rename-token-set-group path name)))
+
+(defn- on-create-token-set
+  [parent-set name]
+  (let [;; FIXME: this code should be reusable under helper under
+        ;; common types namespace
+        name
+        (if-let [parent-path (ctob/get-token-set-path parent-set)]
+          (->> (concat parent-path (ctob/split-token-set-name name))
+               (ctob/join-set-path))
+          (ctob/normalize-set-name name))]
+
+    (st/emit! (ptk/data-event ::ev/event {::ev/name "create-token-set" :name name})
+              (dt/create-token-set name))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; COMPONENTS
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(mf/defc editing-label*
+  {::mf/private true}
   [{:keys [default-value on-cancel on-submit]}]
-  (let [ref (mf/use-ref)
-        on-submit-valid (mf/use-fn
-                         (fn [event]
-                           (let [value (str/trim (dom/get-target-val event))]
-                             (if (or (str/empty? value)
-                                     (= value default-value))
-                               (on-cancel)
-                               (do
-                                 (on-submit value)
-                                 (on-cancel))))))
-        on-key-down (mf/use-fn
-                     (fn [event]
-                       (cond
-                         (kbd/enter? event) (on-submit-valid event)
-                         (kbd/esc? event) (on-cancel))))]
+  (let [on-submit
+        (mf/use-fn
+         (mf/deps on-cancel on-submit default-value)
+         (fn [event]
+           (let [value (dom/get-target-val event)]
+             (if (or (str/empty? value)
+                     (= value default-value))
+               (on-cancel)
+               (on-submit value)))))
+
+        on-key-down
+        (mf/use-fn
+         (mf/deps on-submit on-cancel)
+         (fn [event]
+           (cond
+             (kbd/enter? event) (on-submit event)
+             (kbd/esc? event) (on-cancel))))]
     [:input
      {:class (stl/css :editing-node)
       :type "text"
-      :ref ref
-      :on-blur on-submit-valid
+      :on-blur on-submit
       :on-key-down on-key-down
       :auto-focus true
+      :placeholder (tr "workspace.token.set-edit-placeholder")
       :default-value default-value}]))
 
-(mf/defc checkbox
-  [{:keys [checked aria-label on-click]}]
-  (let [all? (true? checked)
-        mixed? (= checked "mixed")
+(mf/defc checkbox*
+  [{:keys [checked aria-label on-click disabled]}]
+  (let [all?     (true? checked)
+        mixed?   (= checked "mixed")
         checked? (or all? mixed?)]
+
     [:div {:role "checkbox"
            :aria-checked (dm/str checked)
+           :disabled disabled
+           :title (when disabled (tr "workspace.token.no-permisions-set"))
            :tab-index 0
            :class (stl/css-case :checkbox-style true
-                                :checkbox-checked-style checked?)
-           :on-click on-click}
-     (when checked?
+                                :checkbox-checked-style checked?
+                                :checkbox-disabled-checked (and checked? disabled)
+                                :checkbox-disabled disabled)
+           :on-click (when-not disabled on-click)}
+
+     (when ^boolean checked?
        [:> icon*
         {:aria-label aria-label
          :class (stl/css :check-icon)
          :size "s"
          :icon-id (if mixed? ic/remove ic/tick)}])]))
 
-(mf/defc sets-tree-set-group
-  [{:keys [label tree-depth tree-path active? selected? collapsed? editing? on-toggle on-edit on-edit-reset on-edit-submit]}]
-  (let [editing?' (editing? tree-path)
-        active?' (active? tree-path)
+(mf/defc inline-add-button*
+  []
+  (let [can-edit? (mf/use-ctx ctx/can-edit?)]
+    (if can-edit?
+      [:div {:class (stl/css :empty-sets-wrapper)}
+       [:> text* {:as "span" :typography "body-small" :class (stl/css :empty-state-message)}
+        (tr "workspace.token.no-sets-yet")]
+       [:button {:on-click on-start-creation
+                 :class (stl/css :create-set-button)}
+        (tr "workspace.token.create-one")]]
+      [:div {:class (stl/css :empty-sets-wrapper)}
+       [:> text* {:as "span" :typography "body-small" :class (stl/css :empty-state-message)}
+        (tr "workspace.token.no-sets-yet")]])))
+
+(mf/defc add-button*
+  []
+  [:> icon-button* {:variant "ghost"
+                    :icon "add"
+                    :on-click on-start-creation
+                    :aria-label (tr "workspace.token.add set")}])
+
+(mf/defc sets-tree-set-group*
+  {::mf/private true}
+  [{:keys [id label tree-depth tree-path is-active is-selected is-draggable is-collapsed tree-index on-drop
+           on-toggle-collapse on-toggle is-editing on-start-edition on-reset-edition on-edit-submit]}]
+
+  (let [can-edit?
+        (mf/use-ctx ctx/can-edit?)
+
+        label-id
+        (str id "-label")
+
         on-context-menu
         (mf/use-fn
-         (mf/deps editing? tree-path)
+         (mf/deps is-editing id tree-path can-edit?)
          (fn [event]
            (dom/prevent-default event)
            (dom/stop-propagation event)
-           (when-not (editing? tree-path)
-             (st/emit!
-              (wdt/show-token-set-context-menu
-               {:position (dom/get-client-position event)
-                :prefixed-set-path tree-path})))))
+           (when-not is-editing
+             (st/emit! (dt/assign-token-set-context-menu
+                        {:position (dom/get-client-position event)
+                         :is-group true
+                         :id id
+                         :path tree-path})))))
+
         on-collapse-click
         (mf/use-fn
          (fn [event]
            (dom/stop-propagation event)
-           (swap! collapsed? not)))
+           (on-toggle-collapse tree-path)))
+
         on-double-click
-        (mf/use-fn
-         (mf/deps tree-path)
-         #(on-edit tree-path))
+        (mf/use-fn (mf/deps id) #(on-start-edition id))
+
         on-checkbox-click
         (mf/use-fn
-         (mf/deps on-toggle tree-path)
+         (mf/deps on-toggle tree-path can-edit?)
          #(on-toggle tree-path))
+
         on-edit-submit'
         (mf/use-fn
-         (mf/deps tree-path on-edit-submit)
-         #(on-edit-submit tree-path %))]
-    [:div {:role "button"
+         (mf/deps tree-path on-edit-submit can-edit?)
+         #(on-edit-submit tree-path %))
+
+        on-drop
+        (mf/use-fn
+         (mf/deps tree-index on-drop)
+         (fn [position data]
+           (on-drop tree-index position data)))
+
+        [dprops dref]
+        (h/use-sortable
+         :data-type "penpot/token-set"
+         :on-drop on-drop
+         :data {:index tree-index
+                :is-group true}
+         :detect-center? true
+         :draggable? is-draggable)]
+
+    [:div {:ref dref
+           :role "button"
+           :aria-labelledby label-id
            :data-testid "tokens-set-group-item"
            :style {"--tree-depth" tree-depth}
            :class (stl/css-case :set-item-container true
                                 :set-item-group true
-                                :selected-set selected?)
+                                :selected-set is-selected
+                                :dnd-over     (= (:over dprops) :center)
+                                :dnd-over-top (= (:over dprops) :top)
+                                :dnd-over-bot (= (:over dprops) :bot))
            :on-context-menu on-context-menu}
      [:> icon-button*
       {:class (stl/css :set-item-group-collapse-button)
        :on-click on-collapse-click
        :aria-label (tr "labels.collapse")
-       :icon (if @collapsed? "arrow-right" "arrow-down")
+       :icon (if is-collapsed "arrow-right" "arrow-down")
        :variant "action"}]
-     (if editing?'
-       [:& editing-label
+     (if is-editing
+       [:> editing-label*
         {:default-value label
-         :on-cancel on-edit-reset
-         :on-create on-edit-reset
+         :on-cancel on-reset-edition
          :on-submit on-edit-submit'}]
        [:*
         [:div {:class (stl/css :set-name)
-               :on-double-click on-double-click}
+               :on-double-click on-double-click
+               :id label-id}
          label]
-        [:& checkbox
+        [:> checkbox*
          {:on-click on-checkbox-click
-          :checked (case active?'
+          :disabled (not can-edit?)
+          :checked (case is-active
                      :all true
                      :partial "mixed"
                      :none false)
           :arial-label (tr "workspace.token.select-set")}]])]))
 
-(mf/defc sets-tree-set
-  [{:keys [set label tree-depth tree-path selected? on-select active? on-toggle editing? on-edit on-edit-reset on-edit-submit]}]
-  (let [set-name (.-name set)
-        editing?' (editing? tree-path)
-        active?' (some? (active? set-name))
+(mf/defc sets-tree-set*
+  [{:keys [id set label tree-depth tree-path tree-index is-selected is-active is-draggable is-editing
+           on-select on-drop on-toggle on-start-edition on-reset-edition on-edit-submit]}]
+
+  (let [set-name  (get set :name)
+        can-edit? (mf/use-ctx ctx/can-edit?)
+
         on-click
         (mf/use-fn
-         (mf/deps editing?' tree-path)
+         (mf/deps is-editing tree-path)
          (fn [event]
            (dom/stop-propagation event)
-           (when-not editing?'
-             (on-select tree-path))))
+           (when-not is-editing
+             (when (fn? on-select)
+               (on-select set-name)))))
+
         on-context-menu
         (mf/use-fn
-         (mf/deps editing?' tree-path)
+         (mf/deps is-editing id tree-path can-edit?)
          (fn [event]
            (dom/prevent-default event)
            (dom/stop-propagation event)
-           (when-not editing?'
-             (st/emit!
-              (wdt/show-token-set-context-menu
-               {:position (dom/get-client-position event)
-                :prefixed-set-path tree-path})))))
-        on-double-click (mf/use-fn
-                         (mf/deps tree-path)
-                         #(on-edit tree-path))
-        on-checkbox-click (mf/use-fn
-                           (mf/deps set-name)
-                           (fn [event]
-                             (dom/stop-propagation event)
-                             (on-toggle set-name)))
-        on-edit-submit' (mf/use-fn
-                         (mf/deps set on-edit-submit)
-                         #(on-edit-submit set-name (ctob/update-name set %)))]
-    [:div {:role "button"
+           (when (and can-edit? (not is-editing))
+             (st/emit! (dt/assign-token-set-context-menu
+                        {:position (dom/get-client-position event)
+                         :is-group false
+                         :id id
+                         :path tree-path})))))
+
+        on-double-click
+        (mf/use-fn (mf/deps id) #(on-start-edition id))
+
+        on-checkbox-click
+        (mf/use-fn
+         (mf/deps set-name on-toggle)
+         (fn [event]
+           (dom/stop-propagation event)
+           (when (fn? on-toggle)
+             (on-toggle set-name))))
+
+        on-edit-submit'
+        (mf/use-fn
+         (mf/deps set on-edit-submit)
+         #(on-edit-submit set %))
+
+        on-drag
+        (mf/use-fn
+         (mf/deps tree-path)
+         (fn [_]
+           (when-not is-selected
+             (on-select tree-path))))
+
+        on-drop
+        (mf/use-fn
+         (mf/deps tree-index on-drop)
+         (fn [position data]
+           (on-drop tree-index position data)))
+
+        [dprops dref]
+        (h/use-sortable
+         :data-type "penpot/token-set"
+         :on-drag on-drag
+         :on-drop on-drop
+         :data {:index tree-index
+                :is-group false}
+         :draggable? is-draggable)
+
+        drop-over
+        (get dprops :over)]
+
+    [:div {:ref dref
+           :role "button"
            :data-testid "tokens-set-item"
            :style {"--tree-depth" tree-depth}
            :class (stl/css-case :set-item-container true
-                                :selected-set selected?)
+                                :selected-set is-selected
+                                :dnd-over     (= drop-over :center)
+                                :dnd-over-top (= drop-over :top)
+                                :dnd-over-bot (= drop-over :bot))
            :on-click on-click
            :on-context-menu on-context-menu
-           :aria-checked active?'}
+           :aria-checked is-active}
+
      [:> icon*
       {:icon-id "document"
        :class (stl/css-case :icon true
                             :root-icon (not tree-depth))}]
-     (if editing?'
-       [:& editing-label
+     (if is-editing
+       [:> editing-label*
         {:default-value label
-         :on-cancel on-edit-reset
-         :on-create on-edit-reset
+         :on-cancel on-reset-edition
          :on-submit on-edit-submit'}]
        [:*
         [:div {:class (stl/css :set-name)
                :on-double-click on-double-click}
          label]
-        [:& checkbox
+        [:> checkbox*
          {:on-click on-checkbox-click
+          :disabled (not can-edit?)
           :arial-label (tr "workspace.token.select-set")
-          :checked active?'}]])]))
+          :checked is-active}]])]))
 
-(mf/defc sets-tree
-  [{:keys [active?
-           group-active?
-           editing?
-           on-edit
-           on-edit-reset
+(mf/defc token-sets-tree*
+  [{:keys [is-draggable
+           selected
+           is-token-set-group-active
+           is-token-set-active
+           on-start-edition
+           on-reset-edition
            on-edit-submit-set
            on-edit-submit-group
            on-select
            on-toggle-set
            on-toggle-set-group
-           selected?
-           set-node
-           set-path
-           tree-depth
-           tree-path]
-    :or {tree-depth 0}
-    :as props}]
-  (let [[set-path-prefix set-fname] (some-> set-path (ctob/split-set-str-path-prefix))
-        set? (instance? ctob/TokenSet set-node)
-        set-group? (= ctob/set-group-prefix set-path-prefix)
-        root? (= tree-depth 0)
-        collapsed? (mf/use-state false)
-        children? (and
-                   (or root? set-group?)
-                   (not @collapsed?))]
-    [:*
-     (cond
-       root? nil
-       set?
-       [:& sets-tree-set
-        {:set set-node
-         :active? active?
-         :selected? (selected? tree-path)
-         :on-select on-select
-         :label set-fname
-         :tree-path (or tree-path set-path)
-         :tree-depth tree-depth
-         :editing? editing?
-         :on-toggle on-toggle-set
-         :on-edit on-edit
-         :on-edit-reset on-edit-reset
-         :on-edit-submit on-edit-submit-set}]
-       set-group?
-       [:& sets-tree-set-group
-        {:selected? (selected? tree-path)
-         :active? group-active?
-         :on-select on-select
-         :label set-fname
-         :collapsed? collapsed?
-         :tree-path (or tree-path set-path)
-         :tree-depth tree-depth
-         :editing? editing?
-         :on-toggle on-toggle-set-group
-         :on-edit on-edit
-         :on-edit-reset on-edit-reset
-         :on-edit-submit on-edit-submit-group}])
-     (when children?
-       (for [[set-path set-node] set-node
-             :let [tree-path' (ctob/join-set-path-str tree-path set-path)]]
-         [:& sets-tree
-          {:key tree-path'
-           :set-path set-path
-           :set-node set-node
-           :tree-depth (when-not root? (inc tree-depth))
-           :tree-path tree-path'
-           :on-select on-select
-           :selected? selected?
-           :on-toggle-set on-toggle-set
-           :on-toggle-set-group on-toggle-set-group
-           :active? active?
-           :group-active? group-active?
-           :editing? editing?
-           :on-edit on-edit
-           :on-edit-reset on-edit-reset
-           :on-edit-submit-set on-edit-submit-set
-           :on-edit-submit-group on-update-token-set-group}]))]))
+           token-sets
+           new-path
+           edition-id]}]
 
-(mf/defc controlled-sets-list
+  (let [collapsed-paths* (mf/use-state #{})
+        collapsed-paths  (deref collapsed-paths*)
+
+        collapsed?
+        (mf/use-fn
+         (mf/deps collapsed-paths)
+         (partial contains? collapsed-paths))
+
+        on-drop
+        (mf/use-fn
+         (mf/deps collapsed-paths)
+         (fn [tree-index position data]
+           (let [params {:from-index (:index data)
+                         :to-index tree-index
+                         :position position
+                         :collapsed-paths collapsed-paths}]
+             (if (:is-group data)
+               (st/emit! (dt/drop-token-set-group params))
+               (st/emit! (dt/drop-token-set params))))))
+
+        on-toggle-collapse
+        (mf/use-fn
+         (fn [path]
+           (swap! collapsed-paths* #(if (contains? % path)
+                                      (disj % path)
+                                      (conj % path)))))]
+
+    (for [{:keys [id token-set index is-new is-group path parent-path depth] :as node}
+          (ctob/sets-tree-seq token-sets
+                              {:skip-children-pred collapsed?
+                               :new-at-path new-path})]
+      (cond
+        ^boolean is-group
+        [:> sets-tree-set-group*
+         {:key index
+          :label (peek path)
+          :id id
+          :is-active (is-token-set-group-active path)
+          :is-selected false
+          :is-draggable is-draggable
+          :is-editing (= edition-id id)
+          :is-collapsed (collapsed? path)
+          :on-select on-select
+
+          :tree-path path
+          :tree-depth depth
+          :tree-index index
+          :tree-parent-path parent-path
+
+          :on-drop on-drop
+          :on-start-edition on-start-edition
+          :on-reset-edition on-reset-edition
+          :on-edit-submit on-edit-submit-group
+          :on-toggle-collapse on-toggle-collapse
+          :on-toggle on-toggle-set-group}]
+
+        ^boolean is-new
+        [:> sets-tree-set*
+         {:key index
+          :set token-set
+          :label ""
+          :id id
+          :is-editing true
+          :is-active true
+          :is-selected true
+
+          :tree-path path
+          :tree-depth depth
+          :tree-index index
+          :tree-parent-path parent-path
+
+          :on-drop on-drop
+          :on-reset-edition on-reset-edition
+          :on-edit-submit on-create-token-set}]
+
+        :else
+        [:> sets-tree-set*
+         {:key index
+          :set token-set
+          :id  id
+          :label (peek path)
+          :is-editing (= edition-id id)
+          :is-active (is-token-set-active id)
+          :is-selected (= selected id)
+          :is-draggable is-draggable
+          :on-select on-select
+          :tree-path path
+          :tree-depth depth
+          :tree-index index
+          :tree-parent-path parent-path
+          :on-toggle on-toggle-set
+          :edition-id edition-id
+          :on-start-edition on-start-edition
+          :on-drop on-drop
+          :on-reset-edition on-reset-edition
+          :on-edit-submit on-edit-submit-set}]))))
+
+(mf/defc controlled-sets-list*
+  {::mf/props :obj}
   [{:keys [token-sets
+           selected
            on-update-token-set
            on-update-token-set-group
-           token-set-selected?
-           token-set-active?
-           token-set-group-active?
+           is-token-set-active
+           is-token-set-group-active
            on-create-token-set
            on-toggle-token-set
            on-toggle-token-set-group
+           on-start-edition
+           on-reset-edition
            origin
            on-select
-           context]
-    :as _props}]
-  (let [{:keys [editing? new? on-edit on-reset] :as ctx} (or context (sets-context/use-context))]
+           new-path
+           edition-id]}]
+
+  (assert (fn? is-token-set-group-active) "expected a function for `is-token-set-group-active` prop")
+  (assert (fn? is-token-set-active) "expected a function for `is-token-set-active` prop")
+
+  (let [theme-modal? (= origin "theme-modal")
+        can-edit?    (mf/use-ctx ctx/can-edit?)
+        draggable?   (and (not theme-modal?) can-edit?)
+        empty-state? (and theme-modal?
+                          (empty? token-sets)
+                          (not new-path))
+
+        ;; NOTE: on-reset-edition and on-start-edition function can
+        ;; come as nil, in this case we need to provide a safe
+        ;; fallback for them
+        on-reset-edition
+        (mf/use-fn
+         (mf/deps on-reset-edition)
+         (fn [v]
+           (when (fn? on-reset-edition)
+             (on-reset-edition v))))
+
+        on-start-edition
+        (mf/use-fn
+         (mf/deps on-start-edition)
+         (fn [v]
+           (when (fn? on-start-edition)
+             (on-start-edition v))))]
+
     [:fieldset {:class (stl/css :sets-list)}
-     (if (and (= origin "theme-modal")
-              (empty? token-sets))
+     (if ^boolean empty-state?
        [:> text* {:as "span" :typography "body-small" :class (stl/css :empty-state-message-sets)}
         (tr "workspace.token.no-sets-create")]
-       (if (and (= origin "theme-modal")
-                (empty? token-sets))
-         [:> text* {:as "span" :typography "body-small" :class (stl/css :empty-state-message-sets)}
-          (tr "workspace.token.no-sets-create")]
-         [:*
-          [:& sets-tree
-           {:set-node token-sets
-            :selected? token-set-selected?
-            :on-select on-select
-            :active? token-set-active?
-            :group-active? token-set-group-active?
-            :on-toggle-set on-toggle-token-set
-            :on-toggle-set-group on-toggle-token-set-group
-            :editing? editing?
-            :on-edit on-edit
-            :on-edit-reset on-reset
-            :on-edit-submit-set on-update-token-set
-            :on-edit-submit-group on-update-token-set-group}]
-          (when new?
-            [:& sets-tree-set
-             {:set (ctob/make-token-set :name "")
-              :label ""
-              :selected? (constantly true)
-              :active? (constantly true)
-              :editing? (constantly true)
-              :on-select (constantly nil)
-              :on-edit (constantly nil)
-              :on-edit-reset on-reset
-              :on-edit-submit on-create-token-set}])]))]))
 
-(mf/defc sets-list
-  [{:keys []}]
-  (let [token-sets (mf/deref refs/workspace-token-sets-tree)
-        selected-token-set-path (mf/deref refs/workspace-selected-token-set-path)
-        token-set-selected? (mf/use-fn
-                             (mf/deps token-sets selected-token-set-path)
-                             (fn [tree-path]
-                               (= tree-path selected-token-set-path)))
-        active-token-set-names (mf/deref refs/workspace-active-set-names)
-        token-set-active? (mf/use-fn
-                           (mf/deps active-token-set-names)
-                           (fn [set-name]
-                             (get active-token-set-names set-name)))
-        token-set-group-active? (mf/use-fn
-                                 (fn [prefixed-path]
-                                   @(refs/token-sets-at-path-all-active prefixed-path)))]
-    [:& controlled-sets-list
+       [:> token-sets-tree*
+        {:is-draggable draggable?
+         :new-path new-path
+         :edition-id edition-id
+         :token-sets token-sets
+         :selected selected
+         :on-select on-select
+         :is-token-set-active is-token-set-active
+         :is-token-set-group-active is-token-set-group-active
+         :on-toggle-set on-toggle-token-set
+         :on-toggle-set-group on-toggle-token-set-group
+         :on-create-token-set on-create-token-set
+         :on-start-edition on-start-edition
+         :on-reset-edition on-reset-edition
+         :on-edit-submit-set on-update-token-set
+         :on-edit-submit-group on-update-token-set-group}])]))
+
+(mf/defc sets-list*
+  [{:keys [tokens-lib selected new-path edition-id]}]
+
+  (let [token-sets
+        (some-> tokens-lib (ctob/get-set-tree))
+
+        can-edit?
+        (mf/use-ctx ctx/can-edit?)
+
+        active-token-sets-names
+        (mf/with-memo [tokens-lib]
+          (some-> tokens-lib (ctob/get-active-themes-set-names)))
+
+        token-set-active?
+        (mf/use-fn
+         (mf/deps active-token-sets-names)
+         (fn [name]
+           (contains? active-token-sets-names name)))
+
+        token-set-group-active?
+        (mf/use-fn
+         (fn [group-path]
+           ;; FIXME
+           @(refs/token-sets-at-path-all-active group-path)))
+
+        on-reset-edition
+        (mf/use-fn
+         (mf/deps can-edit?)
+         (fn [_]
+           (when can-edit?
+             (st/emit! (dt/clear-token-set-edition)
+                       (dt/clear-token-set-creation)))))
+
+        on-start-edition
+        (mf/use-fn
+         (mf/deps can-edit?)
+         (fn [id]
+           (when can-edit?
+             (st/emit! (dt/start-token-set-edition id)))))]
+
+    [:> controlled-sets-list*
      {:token-sets token-sets
-      :token-set-selected? token-set-selected?
-      :token-set-active? token-set-active?
-      :token-set-group-active? token-set-group-active?
+
+      :is-token-set-active token-set-active?
+      :is-token-set-group-active token-set-group-active?
       :on-select on-select-token-set-click
+
+      :selected selected
+      :new-path new-path
+      :edition-id edition-id
+
       :origin "set-panel"
+      :can-edit can-edit?
+      :on-start-edition on-start-edition
+      :on-reset-edition on-reset-edition
+
       :on-toggle-token-set on-toggle-token-set-click
       :on-toggle-token-set-group on-toggle-token-set-group-click
       :on-update-token-set on-update-token-set

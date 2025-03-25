@@ -29,6 +29,7 @@
    [app.common.types.components-list :as ctkl]
    [app.common.types.container :as ctn]
    [app.common.types.file :as ctf]
+   [app.common.types.page :as ctp]
    [app.common.types.shape :as cts]
    [app.common.types.shape-tree :as ctst]
    [app.common.types.shape.layout :as ctl]
@@ -50,6 +51,7 @@
    [app.main.data.workspace.collapse :as dwco]
    [app.main.data.workspace.colors :as dwcl]
    [app.main.data.workspace.comments :as dwcm]
+   [app.main.data.workspace.common :as dwc]
    [app.main.data.workspace.drawing :as dwd]
    [app.main.data.workspace.edition :as dwe]
    [app.main.data.workspace.fix-broken-shapes :as fbs]
@@ -108,9 +110,6 @@
 (declare ^:private workspace-initialized)
 (declare ^:private fetch-libraries)
 (declare ^:private libraries-fetched)
-(declare ^:private preload-data-uris)
-
-;; (declare go-to-layout)
 
 ;; --- Initialize Workspace
 
@@ -170,11 +169,13 @@
                            (assoc file :data (d/removem (comp t/pointer? val) data))))))))))
 
 (defn- libraries-fetched
-  [libraries]
+  [file-id libraries]
   (ptk/reify ::libraries-fetched
     ptk/UpdateEvent
     (update [_ state]
-      (let [libraries (d/index-by :id libraries)]
+      (let [libraries (->> libraries
+                           (map (fn [l] (assoc l :library-of file-id)))
+                           (d/index-by :id))]
         (update state :files merge libraries)))
 
     ptk/WatchEvent
@@ -190,8 +191,8 @@
                   libraries)]
 
         (when needs-check?
-          (rx/concat (rx/timer 1000)
-                     (rx/of (dwl/notify-sync-file file-id))))))))
+          (->> (rx/of (dwl/notify-sync-file file-id))
+               (rx/delay 1000)))))))
 
 (defn- fetch-libraries
   [file-id]
@@ -210,7 +211,7 @@
                               (rx/map #(assoc % :synced-at synced-at)))))
                       (rx/merge-map resolve-file)
                       (rx/reduce conj [])
-                      (rx/map libraries-fetched))
+                      (rx/map (partial libraries-fetched file-id)))
                  (->> (rx/from libraries)
                       (rx/map :id)
                       (rx/mapcat (fn [file-id]
@@ -252,7 +253,6 @@
     (watch [_ state _]
       (let [team-id    (:current-team-id state)
             file-id    (:id file)]
-
         (rx/of (dwn/initialize team-id file-id)
                (dwsl/initialize-shape-layout)
                (fetch-libraries file-id))))))
@@ -273,6 +273,15 @@
         (rx/of (dws/select-shapes frames-id)
                dwz/zoom-to-selected-shape)))))
 
+(defn- select-frame-tool
+  [file-id page-id]
+  (ptk/reify ::select-frame-tool
+    ptk/WatchEvent
+    (watch [_ state _]
+      (let [page (dsh/lookup-page state file-id page-id)]
+        (when (ctp/is-empty? page)
+          (rx/of (dwd/select-for-drawing :frame)))))))
+
 (defn- fetch-bundle
   "Multi-stage file bundle fetch coordinator"
   [file-id]
@@ -281,7 +290,8 @@
     (watch [_ state stream]
       (let [features     (features/get-team-enabled-features state)
             render-wasm? (contains? features "render-wasm/v1")
-            stopper-s    (rx/filter (ptk/type? ::finalize-workspace) stream)]
+            stopper-s    (rx/filter (ptk/type? ::finalize-workspace) stream)
+            team-id      (:current-team-id state)]
 
         (->> (rx/concat
               ;; Firstly load wasm module if it is enabled and fonts
@@ -295,7 +305,7 @@
                     (rx/filter (ptk/type? ::df/fonts-loaded))
                     (rx/take 1)
                     (rx/ignore))
-               (rx/of (df/fetch-fonts)))
+               (rx/of (df/fetch-fonts team-id)))
 
               ;; Then fetch file and thumbnails
               (->> (rx/zip (rp/cmd! :get-file {:id file-id :features features})
@@ -314,13 +324,10 @@
 (defn initialize-workspace
   [file-id]
   (assert (uuid? file-id) "expected valud uuid for `file-id`")
-
   (ptk/reify ::initialize-workspace
     ptk/UpdateEvent
     (update [_ state]
       (-> state
-          (dissoc :files)
-          (dissoc :workspace-ready)
           (assoc :recent-colors (:recent-colors storage/user))
           (assoc :recent-fonts (:recent-fonts storage/user))
           (assoc :current-file-id file-id)
@@ -328,7 +335,7 @@
 
     ptk/WatchEvent
     (watch [_ state stream]
-      (log/debug :hint "initialize-workspace" :file-id file-id)
+      (log/debug :hint "initialize-workspace" :file-id (dm/str file-id))
       (let [stoper-s (rx/filter (ptk/type? ::finalize-workspace) stream)
             rparams  (rt/get-params state)]
 
@@ -387,7 +394,7 @@
 
 (defn finalize-workspace
   [file-id]
-  (ptk/reify ::finalize-file
+  (ptk/reify ::finalize-workspace
     ptk/UpdateEvent
     (update [_ state]
       (-> state
@@ -395,11 +402,10 @@
           (dissoc
            :current-file-id
            :workspace-editor-state
-           :files
            :workspace-media-objects
            :workspace-persistence
            :workspace-presence
-           :workspace-ready
+           :workspace-tokens
            :workspace-undo)
           (update :workspace-global dissoc :read-only?)
           (assoc-in [:workspace-global :options-mode] :design)))
@@ -412,6 +418,7 @@
                (dpj/finalize-project project-id)
                (dwsl/finalize-shape-layout)
                (dwcl/stop-picker)
+               (dwc/set-workspace-visited)
                (modal/hide)
                (ntf/hide))))))
 
@@ -426,46 +433,68 @@
 ;; Make this event callable through dynamic resolution
 (defmethod ptk/resolve ::reload-current-file [_ _] (reload-current-file))
 
-(defn initialize-page
-  [page-id]
-  (assert (uuid? page-id) "expected valid uuid for `page-id`")
 
-  (ptk/reify ::initialize-page
+
+(def ^:private xf:collect-file-media
+  "Resolve and collect all file media on page objects"
+  (comp (map second)
+        (keep (fn [{:keys [metadata fill-image]}]
+                (cond
+                  (some? metadata)   (cf/resolve-file-media metadata)
+                  (some? fill-image) (cf/resolve-file-media fill-image))))))
+
+
+(defn- initialize-page*
+  "Second phase of page initialization, once we know the page is
+  available on the sate"
+  [file-id page-id page]
+  (ptk/reify ::initialize-page*
     ptk/UpdateEvent
     (update [_ state]
-      (if-let [{:keys [id] :as page} (dsh/lookup-page state page-id)]
-        ;; we maintain a cache of page state for user convenience with the exception of the
-        ;; selection; when user abandon the current page, the selection is lost
-        (let [local (dm/get-in state [:workspace-cache id] default-workspace-local)]
-          (-> state
-              (assoc :current-page-id id)
-              (assoc :workspace-local (assoc local :selected (d/ordered-set)))
-              (assoc :workspace-trimmed-page (dm/select-keys page [:id :name]))
+      ;; selection; when user abandon the current page, the selection is lost
+      (let [local (dm/get-in state [:workspace-cache [file-id page-id]] default-workspace-local)]
+        (-> state
+            (assoc :current-page-id page-id)
+            (assoc :workspace-local (assoc local :selected (d/ordered-set)))
+            (assoc :workspace-trimmed-page (dm/select-keys page [:id :name]))
 
-              ;; FIXME: this should be done on `initialize-layout` (?)
-              (update :workspace-layout layout/load-layout-flags)
-              (update :workspace-global layout/load-layout-state)))
+            ;; FIXME: this should be done on `initialize-layout` (?)
+            (update :workspace-layout layout/load-layout-flags)
+            (update :workspace-global layout/load-layout-state))))
 
-        state))
+    ptk/EffectEvent
+    (effect [_ _ _]
+      (let [uris  (into #{} xf:collect-file-media (:objects page))]
+        (->> (rx/from uris)
+             (rx/subs! #(http/fetch-data-uri % false)))))))
 
+(defn initialize-page
+  [file-id page-id]
+  (assert (uuid? file-id) "expected valid uuid for `file-id`")
+
+  (ptk/reify ::initialize-page
     ptk/WatchEvent
     (watch [_ state _]
-      (let [file-id (:current-file-id state)]
-        (rx/of (preload-data-uris page-id)
+      (if-let [page (dsh/lookup-page state file-id page-id)]
+        (rx/of (initialize-page* file-id page-id page)
                (dwth/watch-state-changes file-id page-id)
-               (dwl/watch-component-changes))))))
+               (dwl/watch-component-changes)
+               (select-frame-tool file-id page-id))
+        (rx/of (dcm/go-to-workspace :file-id file-id ::rt/replace true))))))
 
 (defn finalize-page
-  [page-id]
+  [file-id page-id]
+  (assert (uuid? file-id) "expected valid uuid for `file-id`")
   (assert (uuid? page-id) "expected valid uuid for `page-id`")
+
   (ptk/reify ::finalize-page
     ptk/UpdateEvent
     (update [_ state]
       (let [local (-> (:workspace-local state)
                       (dissoc :edition :edit-path :selected))
-            exit? (not= :workspace (dm/get-in state [:route :data :name]))
+            exit? (not= :workspace (rt/lookup-name state))
             state (-> state
-                      (update :workspace-cache assoc page-id local)
+                      (update :workspace-cache assoc [file-id page-id] local)
                       (dissoc :current-page-id
                               :workspace-local
                               :workspace-trimmed-page
@@ -473,22 +502,6 @@
 
         (cond-> state
           exit? (dissoc :workspace-drawing))))))
-
-(defn- preload-data-uris
-  "Preloads the image data so it's ready when necessary"
-  [page-id]
-  (ptk/reify ::preload-data-uris
-    ptk/EffectEvent
-    (effect [_ state _]
-      (let [xform (comp (map second)
-                        (keep (fn [{:keys [metadata fill-image]}]
-                                (cond
-                                  (some? metadata)   (cf/resolve-file-media metadata)
-                                  (some? fill-image) (cf/resolve-file-media fill-image)))))
-            uris  (into #{} xform (dsh/lookup-page-objects state page-id))]
-
-        (->> (rx/from uris)
-             (rx/subs! #(http/fetch-data-uri % false)))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Workspace Page CRUD
@@ -507,10 +520,8 @@
       (watch [it state _]
         (let [pages   (-> (dsh/lookup-file-data state)
                           (get :pages-index))
-
               unames  (cfh/get-used-names pages)
-              name    (cfh/generate-unique-name unames "Page 1")
-
+              name    (cfh/generate-unique-name "Page" unames :immediate-suffix? true)
               changes (-> (pcb/empty-changes it)
                           (pcb/add-empty-page id name))]
 
@@ -527,7 +538,13 @@
             page               (get pages page-id)
 
             unames             (cfh/get-used-names pages)
-            name               (cfh/generate-unique-name unames (:name page))
+            suffix-fn          (fn [copy-count]
+                                 (str/concat " "
+                                             (tr "dashboard.copy-suffix")
+                                             (when (> copy-count 1)
+                                               (str " " copy-count))))
+            base-name          (:name page)
+            name               (cfh/generate-unique-name base-name unames :suffix-fn suffix-fn)
             objects            (update-vals (:objects page) #(dissoc % :use-for-thumbnail))
 
             main-instances-ids (set (keep #(when (ctk/main-instance? (val %)) (key %)) objects))
@@ -542,7 +559,7 @@
                                                  fdata
                                                  (gpt/point (:x shape) (:y shape))
                                                  true
-                                                 {:keep-ids? true})
+                                                 {:keep-ids? true :force-frame-id (:frame-id shape)})
                     children (into {} (map (fn [shape] [(:id shape) shape]) new-shapes))
                     objs (assoc objs id new-shape)]
                 (merge objs children)))
@@ -875,6 +892,7 @@
     (watch [it state _]
       (let [page-id  (:current-page-id state)
             objects  (dsh/lookup-page-objects state page-id)
+            data     (dsh/lookup-file-data state)
 
             ;; Ignore any shape whose parent is also intended to be moved
             ids      (cfh/clean-loops objects ids)
@@ -884,13 +902,15 @@
 
             all-parents (into #{parent-id} (map #(cfh/get-parent-id objects %)) ids)
 
-            changes (cls/generate-relocate (pcb/empty-changes it)
-                                           objects
-                                           parent-id
-                                           page-id
-                                           to-index
-                                           ids
-                                           :ignore-parents? ignore-parents?)
+            changes (-> (pcb/empty-changes it)
+                        (pcb/with-page-id page-id)
+                        (pcb/with-objects objects)
+                        (pcb/with-library-data data)
+                        (cls/generate-relocate
+                         parent-id
+                         to-index
+                         ids
+                         :ignore-parents? ignore-parents?))
             undo-id (js/Symbol)]
 
         (rx/of (dwu/start-undo-transaction undo-id)
@@ -1506,10 +1526,10 @@
               (coll? transit-data)
               (rx/of (paste-transit-shapes (assoc transit-data :in-viewport in-viewport?)))
 
-              (string? html-data)
+              (and (string? html-data) (d/not-empty? html-data))
               (rx/of (paste-html-text html-data text-data))
 
-              (string? text-data)
+              (and (string? text-data) (d/not-empty? text-data))
               (rx/of (paste-text text-data))
 
               :else
@@ -1536,6 +1556,37 @@
                           (mapv (d/getf objects)))
             css (css/generate-style objects selected selected {:with-prelude? false})]
         (wapi/write-to-clipboard css)))))
+
+(defn copy-selected-text
+  []
+  (ptk/reify ::copy-selected-text
+    ptk/EffectEvent
+    (effect [_ state _]
+      (let [selected (dsh/lookup-selected state)
+            objects  (dsh/lookup-page-objects state)
+
+            text-shapes
+            (->> (cfh/selected-with-children objects selected)
+                 (keep (d/getf objects))
+                 (filter cfh/text-shape?))
+
+            selected (into (d/ordered-set) (map :id) text-shapes)
+
+            ;; Narrow the objects map so it contains only relevant data for
+            ;; selected and its parents
+            objects  (cfh/selected-subtree objects selected)
+            selected (->> (ctst/sort-z-index objects selected)
+                          (into (d/ordered-set)))
+
+            text
+            (->> selected
+                 (map
+                  (fn [id]
+                    (let [shape (get objects id)]
+                      (-> shape :content txt/content->text))))
+                 (str/join "\n"))]
+
+        (wapi/write-to-clipboard text)))))
 
 (defn copy-selected-props
   []
@@ -1568,68 +1619,73 @@
                 (js/console.error "clipboard blocked:" error)
                 (rx/empty))]
 
-        (let [selected (->> (dsh/lookup-selected state) first)
-              objects  (dsh/lookup-page-objects state)]
+        (let [selected (dsh/lookup-selected state)]
+          (if (> (count selected) 1)
+            ;; If multiple items are selected don't do anything
+            (rx/empty)
 
-          (when-let [shape (get objects selected)]
-            (let [props (cts/extract-props shape)
-                  features (-> (features/get-team-enabled-features state)
-                               (set/difference cfeat/frontend-only-features))
-                  version  (-> (dsh/lookup-file state) :version)
+            (let [selected (->> (dsh/lookup-selected state) first)
+                  objects  (dsh/lookup-page-objects state)]
+              (when-let [shape (get objects selected)]
+                (let [props (cts/extract-props shape)
+                      features (-> (features/get-team-enabled-features state)
+                                   (set/difference cfeat/frontend-only-features))
+                      version  (-> (dsh/lookup-file state) :version)
 
-                  copy-data {:type :copied-props
-                             :features features
-                             :version version
-                             :props props
-                             :images #{}}]
+                      copy-data {:type :copied-props
+                                 :features features
+                                 :version version
+                                 :props props
+                                 :images #{}}]
 
-              ;; The clipboard API doesn't handle well asynchronous calls because it expects to use
-              ;; the clipboard in an user interaction. If you do an async call the callback is outside
-              ;; the thread of the UI and so Safari blocks the copying event.
-              ;; We use the API `ClipboardItem` that allows promises to be passed and so the event
-              ;; will wait for the promise to resolve and everything should work as expected.
-              ;; This only works in the current versions of the browsers.
-              (if (some? (unchecked-get ug/global "ClipboardItem"))
-                (let [resolve-data-promise
-                      (p/create
-                       (fn [resolve reject]
-                         (->> (rx/of copy-data)
-                              (rx/mapcat resolve-images)
-                              (rx/map #(t/encode-str % {:type :json-verbose}))
-                              (rx/map #(wapi/create-blob % "text/plain"))
-                              (rx/subs! resolve reject))))]
+                  ;; The clipboard API doesn't handle well asynchronous calls because it expects to use
+                  ;; the clipboard in an user interaction. If you do an async call the callback is outside
+                  ;; the thread of the UI and so Safari blocks the copying event.
+                  ;; We use the API `ClipboardItem` that allows promises to be passed and so the event
+                  ;; will wait for the promise to resolve and everything should work as expected.
+                  ;; This only works in the current versions of the browsers.
+                  (if (some? (unchecked-get ug/global "ClipboardItem"))
+                    (let [resolve-data-promise
+                          (p/create
+                           (fn [resolve reject]
+                             (->> (rx/of copy-data)
+                                  (rx/mapcat resolve-images)
+                                  (rx/map #(t/encode-str % {:type :json-verbose}))
+                                  (rx/map #(wapi/create-blob % "text/plain"))
+                                  (rx/subs! resolve reject))))]
 
-                  (->> (rx/from (wapi/write-to-clipboard-promise "text/plain" resolve-data-promise))
-                       (rx/catch on-copy-error)
-                       (rx/ignore)))
-                ;; FIXME: this is to support Firefox versions below 116 that don't support
-                ;; `ClipboardItem` after the version 116 is less common we could remove this.
-                ;; https://caniuse.com/?search=ClipboardItem
-                (->> (rx/of copy-data)
-                     (rx/mapcat resolve-images)
-                     (rx/map #(wapi/write-to-clipboard (t/encode-str % {:type :json-verbose})))
-                     (rx/catch on-copy-error)
-                     (rx/ignore))))))))))
+                      (->> (rx/from (wapi/write-to-clipboard-promise "text/plain" resolve-data-promise))
+                           (rx/catch on-copy-error)
+                           (rx/ignore)))
+                    ;; FIXME: this is to support Firefox versions below 116 that don't support
+                    ;; `ClipboardItem` after the version 116 is less common we could remove this.
+                    ;; https://caniuse.com/?search=ClipboardItem
+                    (->> (rx/of copy-data)
+                         (rx/mapcat resolve-images)
+                         (rx/map #(wapi/write-to-clipboard (t/encode-str % {:type :json-verbose})))
+                         (rx/catch on-copy-error)
+                         (rx/ignore))))))))))))
 
 (defn paste-selected-props
   []
   (ptk/reify ::paste-selected-props
     ptk/WatchEvent
-    (watch [_ _ _]
-      (letfn [(decode-entry [entry]
-                (-> entry t/decode-str paste-transit-props))
+    (watch [_ state _]
+      (when-not (-> state :workspace-global :read-only?)
+        (letfn [(decode-entry [entry]
+                  (-> entry t/decode-str paste-transit-props))
 
-              (on-error [cause]
-                (let [data (ex-data cause)]
-                  (if (:not-implemented data)
-                    (rx/of (ntf/warn (tr "errors.clipboard-not-implemented")))
-                    (js/console.error "Clipboard error:" cause))
-                  (rx/empty)))]
+                (on-error [cause]
+                  (let [data (ex-data cause)]
+                    (if (:not-implemented data)
+                      (rx/of (ntf/warn (tr "errors.clipboard-not-implemented")))
+                      (js/console.error "Clipboard error:" cause))
+                    (rx/empty)))]
 
-        (->> (wapi/read-from-clipboard)
-             (rx/map decode-entry)
-             (rx/take 1)
-             (rx/catch on-error))))))
+          (->> (wapi/read-from-clipboard)
+               (rx/map decode-entry)
+               (rx/take 1)
+               (rx/catch on-error)))))))
 
 (defn selected-frame? [state]
   (let [selected (dsh/lookup-selected state)

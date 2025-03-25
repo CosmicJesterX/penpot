@@ -10,6 +10,7 @@
    [app.config :as cf]
    [app.main.data.common :as dcm]
    [app.main.data.team :as dtm]
+   [app.main.errors :as errors]
    [app.main.refs :as refs]
    [app.main.repo :as rp]
    [app.main.router :as rt]
@@ -29,7 +30,6 @@
    [app.util.dom :as dom]
    [app.util.i18n :refer [tr]]
    [beicon.v2.core :as rx]
-   [potok.v2.core :as ptk]
    [rumext.v2 :as mf]))
 
 (def auth-page
@@ -61,8 +61,7 @@
                                                     :file-id file-id
                                                     :page-id page-id
                                                     :layout layout)))
-                   ptk/handle-error)))
-
+                   errors/on-error)))
   [:> loader*
    {:title (tr "labels.loading")
     :overlay true}])
@@ -128,19 +127,19 @@
   {::mf/props :obj
    ::mf/private true}
   [{:keys [team-id children]}]
-
   (mf/with-effect [team-id]
     (st/emit! (dtm/initialize-team team-id))
     (fn []
       (st/emit! (dtm/finalize-team team-id))))
 
-  (let [team (mf/deref refs/team)]
+  (let [{:keys [permissions] :as team} (mf/deref refs/team)]
     (when (= team-id (:id team))
-      [:& (mf/provider ctx/current-team-id) {:value team-id}
-       [:& (mf/provider ctx/permissions) {:value (:permissions team)}
-        ;; The `:key` is mandatory here because we want to reinitialize
-        ;; all dom tree instead of simple rerender.
-        [:* {:key (str team-id)} children]]])))
+      [:> (mf/provider ctx/current-team-id) {:value team-id}
+       [:> (mf/provider ctx/permissions) {:value permissions}
+        [:> (mf/provider ctx/can-edit?) {:value (:can-edit permissions)}
+         ;; The `:key` is mandatory here because we want to reinitialize
+         ;; all dom tree instead of simple rerender.
+         [:* {:key (str team-id)} children]]]])))
 
 (mf/defc page*
   {::mf/props :obj
@@ -219,7 +218,7 @@
              plugin-url    (some-> params :plugin)
              template-url  (some-> params :template)]
          [:?
-          #_[:& app.main.ui.releases/release-notes-modal {:version "2.4"}]
+          #_[:& app.main.ui.releases/release-notes-modal {:version "2.5"}]
           #_[:& app.main.ui.onboarding/onboarding-templates-modal]
           #_[:& app.main.ui.onboarding/onboarding-modal]
           #_[:& app.main.ui.onboarding.team-choice/onboarding-team-modal]

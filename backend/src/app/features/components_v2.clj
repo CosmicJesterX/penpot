@@ -1071,7 +1071,7 @@
         groups (d/group-by #(first (cfh/split-path (:path %))) assets)
         ;; If there is a group called as the generic-name we have to preserve it
         unames (into #{} (keep str) (keys groups))
-        groups (rename-keys groups {generic-name (cfh/generate-unique-name unames generic-name)})
+        groups (rename-keys groups {generic-name (cfh/generate-unique-name generic-name unames)})
 
         ;; Split large groups in chunks of max-group-size elements
         groups (loop [groups (seq groups)
@@ -1630,9 +1630,19 @@
             fdata (migrate-graphics fdata)]
         (update fdata :options assoc :components-v2 true)))))
 
+;; FIXME: revisit this fn
+(defn- fix-version*
+  [{:keys [version] :as file}]
+  (if (int? version)
+    file
+    (let [version (or (-> file :data :version) 0)]
+      (-> file
+          (assoc :version version)
+          (update :data dissoc :version)))))
+
 (defn- fix-version
   [file]
-  (let [file (fmg/fix-version file)]
+  (let [file (fix-version* file)]
     (if (> (:version file) 22)
       (assoc file :version 22)
       file)))

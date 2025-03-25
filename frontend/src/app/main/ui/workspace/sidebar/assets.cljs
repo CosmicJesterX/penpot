@@ -8,7 +8,7 @@
   (:require-macros [app.main.style :as stl])
   (:require
    [app.common.data.macros :as dm]
-   [app.config :as cf]
+   [app.common.types.components-list :as ctkl]
    [app.main.data.modal :as modal]
    [app.main.data.workspace :as dw]
    [app.main.data.workspace.assets :as dwa]
@@ -33,10 +33,10 @@
    ::mf/private true}
   [{:keys [filters]}]
   (let [file-id   (mf/use-ctx ctx/current-file-id)
-
-        libraries (mf/deref refs/libraries)
-        libraries (mf/with-memo [libraries file-id]
-                    (->> (vals libraries)
+        files     (mf/deref refs/files)
+        libraries (mf/with-memo [files file-id]
+                    (->> (refs/select-libraries files file-id)
+                         (vals)
                          (remove :is-indirect)
                          (remove #(= file-id (:id %)))
                          (map (fn [file]
@@ -74,7 +74,7 @@
 (mf/defc assets-toolbox
   {::mf/wrap [mf/memo]
    ::mf/wrap-props false}
-  [{:keys [size]}]
+  [{:keys [size file-id]}]
   (let [components-v2  (mf/use-ctx ctx/components-v2)
         read-only?     (mf/use-ctx ctx/workspace-read-only?)
         filters*       (mf/use-state
@@ -90,13 +90,10 @@
         section        (:section filters)
         ordering       (:ordering filters)
         reverse-sort?  (= :desc ordering)
-        num-libs       (count (mf/deref refs/libraries))
-
-        show-templates-04-test1?
-        (and (cf/external-feature-flag "templates-04" "test1") (zero? num-libs))
-
-        show-templates-04-test2?
-        (and (cf/external-feature-flag "templates-04" "test2") (zero? num-libs))
+        libs           (mf/deref refs/libraries)
+        num-libs       (count libs)
+        file           (get libs file-id)
+        components     (mf/with-memo [file] (ctkl/components (:data file)))
 
         toggle-ordering
         (mf/use-fn
@@ -132,8 +129,9 @@
 
         show-libraries-dialog
         (mf/use-fn
+         (mf/deps file-id)
          (fn []
-           (modal/show! :libraries-dialog {})
+           (modal/show! :libraries-dialog {:file-id file-id})
            (modal/allow-click-outside!)))
 
         on-open-menu
@@ -166,24 +164,16 @@
     [:article  {:class (stl/css :assets-bar)}
      [:div {:class (stl/css :assets-header)}
       (when-not ^boolean read-only?
-        (cond
-          show-templates-04-test1?
-          [:button {:class (stl/css :libraries-button)
-                    :on-click show-libraries-dialog
-                    :data-testid "libraries"}
-           (tr "workspace.assets.add-library")]
-          show-templates-04-test2?
+        (if (and (= num-libs 1) (empty? components))
           [:button {:class (stl/css :add-library-button)
                     :on-click show-libraries-dialog
                     :data-testid "libraries"}
            (tr "workspace.assets.add-library")]
-          :else
+
           [:button {:class (stl/css :libraries-button)
                     :on-click show-libraries-dialog
                     :data-testid "libraries"}
-           [:span {:class (stl/css :libraries-icon)}
-            i/library]
-           (tr "workspace.assets.libraries")]))
+           (tr "workspace.assets.manage-library")]))
 
 
       [:div {:class (stl/css :search-wrapper)}

@@ -92,7 +92,9 @@
    [:is-shared {:optional true} ::sm/boolean]
    [:data {:optional true} schema:data]
    [:version :int]
-   [:features ::cfeat/features]])
+   [:features ::cfeat/features]
+   [:migrations {:optional true}
+    [::sm/set :string]]])
 
 (sm/register! ::data schema:data)
 (sm/register! ::file schema:file)
@@ -348,24 +350,28 @@
     (true? (= (:id component) (:id ref-component)))))
 
 (defn find-swap-slot
-  [shape container file libraries]
-  (if-let [swap-slot (ctk/get-swap-slot shape)]
-    swap-slot
-    (let [ref-shape (find-ref-shape file
-                                    container
-                                    libraries
-                                    shape
-                                    :include-deleted? true
-                                    :with-context? true)
-          shape-meta (meta ref-shape)
-          ref-file (:file shape-meta)
-          ref-container (:container shape-meta)]
-      (when ref-shape
-        (if-let [swap-slot (ctk/get-swap-slot ref-shape)]
-          swap-slot
-          (if (ctk/main-instance? ref-shape)
-            (:id shape)
-            (find-swap-slot ref-shape ref-container ref-file libraries)))))))
+  ([shape container file libraries]
+   (find-swap-slot shape container file libraries #{}))
+  ([shape container file libraries viewed-ids]
+   (if (contains? viewed-ids (:id shape)) ;; prevent cycles
+     nil
+     (if-let [swap-slot (ctk/get-swap-slot shape)]
+       swap-slot
+       (let [ref-shape (find-ref-shape file
+                                       container
+                                       libraries
+                                       shape
+                                       :include-deleted? true
+                                       :with-context? true)
+             shape-meta (meta ref-shape)
+             ref-file (:file shape-meta)
+             ref-container (:container shape-meta)]
+         (when ref-shape
+           (if-let [swap-slot (ctk/get-swap-slot ref-shape)]
+             swap-slot
+             (if (ctk/main-instance? ref-shape)
+               (:id shape)
+               (find-swap-slot ref-shape ref-container ref-file libraries (conj viewed-ids (:id shape)))))))))))
 
 (defn match-swap-slot?
   [shape-main shape-inst container-inst container-main file libraries]
@@ -464,8 +470,8 @@
   Returns a list ((asset ((container shapes) (container shapes)...))...)"
   [file-data library-data asset-type]
   (let [assets-seq (case asset-type
-                     :component (ctkl/components-seq library-data)
-                     :color (ctcl/colors-seq library-data)
+                     :component  (ctkl/components-seq library-data)
+                     :color      (ctcl/colors-seq library-data)
                      :typography (ctyl/typographies-seq library-data))
 
         find-usages-in-container

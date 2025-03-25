@@ -101,38 +101,46 @@
   "Mark the profile blocked and removes all the http sessiones
   associated with the profile-id."
   [email]
-  (db/with-atomic [conn (:app.db/pool main/system)]
-    (when-let [profile (db/get* conn :profile
-                                {:email (str/lower email)}
-                                {:columns [:id :email]})]
-      (when-not (:is-blocked profile)
-        (db/update! conn :profile {:is-active true} {:id (:id profile)})
-        :activated))))
+  (some-> main/system
+          (db/tx-run!
+           (fn [{:keys [::db/conn] :as system}]
+             (when-let [profile (db/get* conn :profile
+                                         {:email (str/lower email)}
+                                         {:columns [:id :email]})]
+               (when-not (:is-blocked profile)
+                 (db/update! conn :profile {:is-active true} {:id (:id profile)})
+                 :activated))))))
 
 (defn mark-profile-as-blocked!
   "Mark the profile blocked and removes all the http sessiones
   associated with the profile-id."
   [email]
-  (db/with-atomic [conn (:app.db/pool main/system)]
-    (when-let [profile (db/get* conn :profile
-                                {:email (str/lower email)}
-                                {:columns [:id :email]})]
-      (when-not (:is-blocked profile)
-        (db/update! conn :profile {:is-blocked true} {:id (:id profile)})
-        (db/delete! conn :http-session {:profile-id (:id profile)})
-        :blocked))))
+  (some-> main/system
+          (db/tx-run!
+           (fn [{:keys [::db/conn] :as system}]
+             (when-let [profile (db/get* conn :profile
+                                         {:email (str/lower email)}
+                                         {:columns [:id :email]})]
+               (when-not (:is-blocked profile)
+                 (db/update! conn :profile {:is-blocked true} {:id (:id profile)})
+                 (db/delete! conn :http-session {:profile-id (:id profile)})
+                 :blocked))))))
 
 (defn reset-password!
   "Reset a password to a specific one for a concrete user or all users
   if email is `:all` keyword."
   [& {:keys [email password] :or {password "123123"} :as params}]
-  (us/verify! (contains? params :email) "`email` parameter is mandatory")
-  (db/with-atomic [conn (:app.db/pool main/system)]
-    (let [password (derive-password password)]
-      (if (= email :all)
-        (db/exec! conn ["update profile set password=?" password])
-        (let [email (str/lower email)]
-          (db/exec! conn ["update profile set password=? where email=?" password email]))))))
+  (when-not email
+    (throw (IllegalArgumentException. "email is mandatory")))
+
+  (some-> main/system
+          (db/tx-run!
+           (fn [{:keys [::db/conn] :as system}]
+             (let [password (derive-password password)]
+               (if (= email :all)
+                 (db/exec! conn ["update profile set password=?" password])
+                 (let [email (str/lower email)]
+                   (db/exec! conn ["update profile set password=? where email=?" password email]))))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; FEATURES
@@ -154,8 +162,8 @@
   (enable-pointer-map-feature-on-file! file-id opts))
 
 (defn enable-team-feature!
-  [team-id feature]
-  (when-not (contains? cfeat/supported-features feature)
+  [team-id feature & {:keys [skip-check] :or {skip-check false}}]
+  (when (and (not skip-check) (not (contains? cfeat/supported-features feature)))
     (ex/raise :type :assertion
               :code :feature-not-supported
               :hint (str "feature '" feature "' not supported")))
@@ -173,9 +181,8 @@
                       :enabled))))))
 
 (defn disable-team-feature!
-  [team-id feature]
-
-  (when-not (contains? cfeat/supported-features feature)
+  [team-id feature & {:keys [skip-check] :or {skip-check false}}]
+  (when (and (not skip-check) (not (contains? cfeat/supported-features feature)))
     (ex/raise :type :assertion
               :code :feature-not-supported
               :hint (str "feature '" feature "' not supported")))
@@ -431,25 +438,40 @@
 
         process-file
         (fn [file-id idx tpoint]
-          (try
-            (l/trc :hint "process:file:start" :file-id (str file-id) :index idx)
-            (let [system (assoc main/system ::db/rollback rollback?)]
-              (db/tx-run! system (fn [system]
-                                   (binding [h/*system* system]
-                                     (h/process-file! system file-id update-fn opts)))))
-
-            (catch Throwable cause
-              (l/wrn :hint "unexpected error on processing file (skiping)"
+          (let [thread-id (px/get-thread-id)]
+            (try
+              (l/trc :hint "process:file:start"
+                     :tid thread-id
                      :file-id (str file-id)
-                     :index idx
-                     :cause cause))
-            (finally
-              (ps/release! sjobs)
-              (let [elapsed (dt/format-duration (tpoint))]
-                (l/trc :hint "process:file:end"
+                     :index idx)
+              (let [system (assoc main/system ::db/rollback rollback?)]
+                (db/tx-run! system (fn [system]
+                                     (binding [h/*system* system]
+                                       (h/process-file! system file-id update-fn opts)))))
+
+              (catch Throwable cause
+                (l/wrn :hint "unexpected error on processing file (skiping)"
+                       :tid thread-id
                        :file-id (str file-id)
                        :index idx
-                       :elapsed elapsed)))))
+                       :cause cause))
+              (finally
+                (when-let [pause (:pause opts)]
+                  (Thread/sleep (int pause)))
+
+                (ps/release! sjobs)
+                (let [elapsed (dt/format-duration (tpoint))]
+                  (l/trc :hint "process:file:end"
+                         :tid thread-id
+                         :file-id (str file-id)
+                         :index idx
+                         :elapsed elapsed))))))
+
+        process-file*
+        (fn [idx file-id]
+          (ps/acquire! sjobs)
+          (px/run! executor (partial process-file file-id idx (dt/tpoint)))
+          (inc idx))
 
         process-files
         (fn [{:keys [::db/conn] :as system}]
@@ -457,14 +479,12 @@
           (db/exec! conn ["SET idle_in_transaction_session_timeout = 0"])
 
           (try
-            (reduce (fn [idx file-id]
-                      (ps/acquire! sjobs)
-                      (px/run! executor (partial process-file file-id idx (dt/tpoint)))
-                      (inc idx))
-                    0
-                    (->> (db/cursor conn [query] {:chunk-size 1})
-                         (take max-items)
-                         (map :id)))
+            (->> (db/plan conn [query])
+                 (transduce (comp
+                             (take max-items)
+                             (map :id))
+                            (completing process-file*)
+                            0))
             (finally
               ;; Close and await tasks
               (pu/close! executor))))]

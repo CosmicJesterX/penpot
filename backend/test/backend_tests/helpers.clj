@@ -62,7 +62,7 @@
 (def default
   {:database-uri "postgresql://postgres/penpot_test"
    :redis-uri "redis://redis/1"
-   :file-snapshot-every 1})
+   :auto-file-snapshot-every 1})
 
 (def config
   (cf/read-config :prefix "penpot-test"
@@ -138,14 +138,13 @@
                  "  FROM information_schema.tables "
                  " WHERE table_schema = 'public' "
                  "   AND table_name != 'migrations';")]
-    (db/with-atomic [conn *pool*]
-      (db/exec-one! conn ["SET CONSTRAINTS ALL DEFERRED"])
-      (db/exec-one! conn ["SET LOCAL rules.deletion_protection TO off"])
-      (let [result (->> (db/exec! conn [sql])
-                        (map :table-name))]
-        (doseq [table result]
-          (db/exec! conn [(str "delete from " table ";")]))))
-
+    (db/transact! *pool* (fn [conn]
+                           (db/exec-one! conn ["SET CONSTRAINTS ALL DEFERRED"])
+                           (db/exec-one! conn ["SET LOCAL rules.deletion_protection TO off"])
+                           (let [result (->> (db/exec! conn [sql])
+                                             (map :table-name))]
+                             (doseq [table result]
+                               (db/exec! conn [(str "delete from " table ";")])))))
     (next)))
 
 (defn clean-storage
@@ -210,14 +209,14 @@
   ([system i {:keys [profile-id project-id] :as params}]
    (dm/assert! "expected uuid" (uuid? profile-id))
    (dm/assert! "expected uuid" (uuid? project-id))
-   (db/run! system
-            (fn [system]
-              (let [features (cfeat/get-enabled-features cf/flags)]
-                (files.create/create-file system
-                                          (merge {:id (mk-uuid "file" i)
-                                                  :name (str "file" i)
-                                                  :features features}
-                                                 params)))))))
+   (db/tx-run! system
+               (fn [system]
+                 (let [features (cfeat/get-enabled-features cf/flags)]
+                   (files.create/create-file system
+                                             (merge {:id (mk-uuid "file" i)
+                                                     :name (str "file" i)
+                                                     :features features}
+                                                    params)))))))
 
 (defn mark-file-deleted*
   ([params]

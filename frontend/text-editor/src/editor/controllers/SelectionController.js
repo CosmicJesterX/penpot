@@ -358,6 +358,16 @@ export class SelectionController extends EventTarget {
           detail: this.#currentStyle,
         })
       );
+    } else {
+      const firstInline = this.#textEditor.root?.firstElementChild?.firstElementChild;
+      if (firstInline) {
+        this.#updateCurrentStyle(firstInline);
+        this.dispatchEvent(
+          new CustomEvent("stylechange", {
+            detail: this.#currentStyle,
+          }),
+        );
+      }
     }
   }
 
@@ -1037,6 +1047,7 @@ export class SelectionController extends EventTarget {
     if (fragment.children.length === 1
      && fragment.firstElementChild?.dataset?.inline === "force"
     ) {
+      const collapseNode = fragment.lastElementChild.firstChild
       if (this.isInlineStart) {
         this.focusInline.before(...fragment.firstElementChild.children)
       } else if (this.isInlineEnd) {
@@ -1048,13 +1059,22 @@ export class SelectionController extends EventTarget {
         )
         this.focusInline.after(...fragment.firstElementChild.children, newInline)
       }
-      return;
+      return this.collapse(
+        collapseNode,
+        collapseNode.nodeValue.length
+      );
     }
-
+    const collapseNode = fragment.lastElementChild.lastElementChild.firstChild
     if (this.isParagraphStart) {
+      const a = fragment.lastElementChild;
+      const b = this.focusParagraph;
       this.focusParagraph.before(fragment);
+      mergeParagraphs(a, b);
     } else if (this.isParagraphEnd) {
+      const a = this.focusParagraph;
+      const b = fragment.firstElementChild;
       this.focusParagraph.after(fragment);
+      mergeParagraphs(a, b);
     } else {
       const newParagraph = splitParagraph(
         this.focusParagraph,
@@ -1063,6 +1083,7 @@ export class SelectionController extends EventTarget {
       );
       this.focusParagraph.after(fragment, newParagraph);
     }
+    return this.collapse(collapseNode, collapseNode.nodeValue.length);
   }
 
   /**

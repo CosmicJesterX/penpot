@@ -15,6 +15,17 @@ test("User loads worskpace with empty file", async ({ page }) => {
   await expect(workspacePage.pageName).toHaveText("Page 1");
 });
 
+test("User opens a file with a bad page id", async ({ page }) => {
+  const workspacePage = new WorkspacePage(page);
+  await workspacePage.setupEmptyFile(page);
+
+  await workspacePage.goToWorkspace({
+    pageId: "badpage",
+  });
+
+  await expect(workspacePage.pageName).toHaveText("Page 1");
+});
+
 test("User receives presence notifications updates in the workspace", async ({
   page,
 }) => {
@@ -159,6 +170,49 @@ test("User adds a library and its automatically selected in the color palette", 
       "There are no color styles in your library yet",
     ),
   ).toBeVisible();
+});
+
+test("Bug 10179 - Drag & drop doesn't add colors to the Recent Colors palette", async ({
+  page,
+}) => {
+  const workspacePage = new WorkspacePage(page);
+  await workspacePage.setupEmptyFile();
+  await workspacePage.goToWorkspace();
+  await workspacePage.moveButton.click();
+
+  await workspacePage.page.keyboard.press("Alt+p");
+
+  await expect(
+    workspacePage.palette.getByText(
+      "There are no color styles in your library yet",
+    ),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "#E8E9EA" }).click();
+  await expect(page.getByTestId("colorpicker")).toBeVisible();
+  const handler = await page.getByTestId("ramp-handler");
+  await expect(handler).toBeVisible();
+  const saturation_selection = await page.getByTestId(
+    "value-saturation-selector",
+  );
+  await expect(saturation_selection).toBeVisible();
+  const saturation_box = await saturation_selection.boundingBox();
+  const handler_box = await handler.boundingBox();
+  await page.mouse.move(
+    handler_box.x + handler_box.width,
+    handler_box.y + handler_box.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    saturation_box.x + saturation_box.width / 2,
+    saturation_box.y + saturation_box.height / 2,
+  );
+  await page.mouse.up();
+  await expect(
+    workspacePage.palette.getByText(
+      "There are no color styles in your library yet",
+    ),
+  ).not.toBeVisible();
 });
 
 test("Bug 7489 - Workspace-palette items stay hidden when opening with keyboard-shortcut", async ({
@@ -306,4 +360,83 @@ test("Copy/paste properties", async ({ page, context }) => {
   await page.getByText("Ellipse").click({ button: "right" });
   await page.getByText("Copy/Paste as").hover();
   await page.getByText("Paste properties").click();
+});
+
+test("[Taiga #9929] Paste text in workspace", async ({ page, context }) => {
+  const workspacePage = new WorkspacePage(page);
+  await workspacePage.setupEmptyFile(page);
+  await workspacePage.goToWorkspace();
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.evaluate(() => navigator.clipboard.writeText("Lorem ipsum dolor"));
+  await workspacePage.viewport.click({ button: "right" });
+  await page.getByText("PasteCtrlV").click();
+  await workspacePage.viewport
+    .getByRole("textbox")
+    .getByText("Lorem ipsum dolor");
+});
+
+test("[Taiga #9930] Zoom fit all doesn't fits all", async ({
+  page,
+  context,
+}) => {
+  const workspacePage = new WorkspacePage(page);
+  await workspacePage.setupEmptyFile(page);
+  await workspacePage.mockRPC(/get\-file\?/, "workspace/get-file-9930.json");
+  await workspacePage.goToWorkspace({
+    fileId: "8f843b59-7fbb-81ce-8005-aa6d47ae3111",
+    pageId: "fb9798e7-a547-80ae-8005-9ffda4a13e2c",
+  });
+
+  const zoom = await page.getByTitle("Zoom");
+  await zoom.click();
+
+  const zoomIn = await page.getByTitle("Zoom in");
+  await zoomIn.click();
+  await zoomIn.click();
+  await zoomIn.click();
+
+  // Zoom fit all
+  await page.keyboard.press("Shift+1");
+
+  const ids = [
+    "shape-165d1e5a-5873-8010-8005-9ffdbeaeec59",
+    "shape-165d1e5a-5873-8010-8005-9ffdbeaf8d8a",
+    "shape-165d1e5a-5873-8010-8005-9ffdbeaf8d9e",
+    "shape-165d1e5a-5873-8010-8005-9ffdbeb053d9",
+    "shape-165d1e5a-5873-8010-8005-9ffdbeb09738",
+    "shape-165d1e5a-5873-8010-8005-9ffdbeb0f3fc",
+  ];
+
+  function contains(container, contained) {
+    return (
+      container.x <= contained.x &&
+      container.y <= contained.y &&
+      container.width >= contained.width &&
+      container.height >= contained.height
+    );
+  }
+
+  const viewportBoundingBox = await workspacePage.viewport.boundingBox();
+  for (const id of ids) {
+    const shape = await page.locator(`.ws-shape-wrapper > g#${id}`);
+    const shapeBoundingBox = await shape.boundingBox();
+    expect(contains(viewportBoundingBox, shapeBoundingBox)).toBeTruthy();
+  }
+});
+
+test("Bug 9877, user navigation to dashboard from header goes to blank page", async ({
+  page,
+}) => {
+  const workspacePage = new WorkspacePage(page);
+  await workspacePage.setupEmptyFile(page);
+
+  await workspacePage.goToWorkspace();
+
+  const popupPromise = page.waitForEvent("popup");
+  await page.getByText("Drafts").click();
+
+  const popup = await popupPromise;
+  await expect(popup).toHaveURL(
+    /&project-id=c7ce0794-0992-8105-8004-38e630f7920b/,
+  );
 });

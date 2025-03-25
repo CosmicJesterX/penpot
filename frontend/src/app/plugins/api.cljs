@@ -170,8 +170,8 @@
 
     :replaceColor
     (fn  [shapes old-color new-color]
-      (let [old-color (parser/parse-color old-color)
-            new-color (parser/parse-color new-color)]
+      (let [old-color (parser/parse-color-data old-color)
+            new-color (parser/parse-color-data new-color)]
         (cond
           (or (not (array? shapes)) (not (every? shape/shape-proxy? shapes)))
           (u/display-not-valid :replaceColor-shapes shapes)
@@ -194,7 +194,9 @@
                 shapes-by-color
                 (->> (ctc/extract-all-colors shapes file-id shared-libs)
                      (group-by :attrs))]
-            (st/emit! (dwc/change-color-in-selected new-color (get shapes-by-color old-color) old-color))))))
+
+            (when-let [operations (get shapes-by-color old-color)]
+              (st/emit! (dwc/change-color-in-selected operations new-color old-color)))))))
 
     :getRoot
     (fn []
@@ -343,6 +345,25 @@
               page-id (:current-page-id @st/state)]
           (st/emit! (dwm/create-svg-shape id "svg" svg-string (gpt/point 0 0)))
           (shape/shape-proxy plugin-id file-id page-id id))))
+
+    :createShapeFromSvgWithImages
+    (fn [svg-string]
+      (js/Promise.
+       (fn [resolve reject]
+         (cond
+           (or (not (string? svg-string)) (empty? svg-string))
+           (do
+             (u/display-not-valid :createShapeFromSvg "Svg not valid")
+             (reject "Svg not valid"))
+
+           :else
+           (let [id (uuid/next)
+                 file-id (:current-file-id @st/state)
+                 page-id (:current-page-id @st/state)]
+             (st/emit! (dwm/create-svg-shape-with-images
+                        file-id id "svg" svg-string (gpt/point 0 0)
+                        #(resolve (shape/shape-proxy plugin-id file-id page-id id))
+                        reject)))))))
 
     :createBoolean
     (fn [bool-type shapes]

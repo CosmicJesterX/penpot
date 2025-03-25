@@ -16,9 +16,9 @@ $green-200: #a7e8d9;
 $green-500: #2d9f8f;
 $green-950: #0a2927;
 
-$orange-200: #ffc8a8;
-$orange-500: #fe4811;
-$orange-950: #440806;
+$orange-200: #fedeac;
+$orange-500: #fe9c07;
+$orange-950: #3d2501;
 
 $red-200: #ffcada;
 $red-400: #c80857;
@@ -74,8 +74,8 @@ $grayish-red: #bfbfbf;
   --color-accent-secondary: #{$cobalt-700};
   --color-accent-tertiary: #{$purple-600};
   --color-accent-quaternary: #{$pink-400};
-  --color-accent-overlay: #{$purple-600-10};
-  --color-accent-select: #{$purple-700-60};
+  --color-accent-overlay: #{$purple-700-60};
+  --color-accent-select: #{$purple-600-10};
 
   --color-accent-success: #{$green-500};
   --color-background-success: #{$green-200};
@@ -86,6 +86,9 @@ $grayish-red: #bfbfbf;
   --color-foreground-error: #{$red-500};
   --color-accent-info: #{$blue-500};
   --color-background-info: #{$blue-200};
+  --color-background-default: #{$white};
+  --color-accent-default: #{$gray-100};
+  --color-icon-default: #{$blue-teal-700};
 
   --color-background-primary: #{$white};
   --color-background-secondary: #{$gray-200};
@@ -112,8 +115,8 @@ $grayish-red: #bfbfbf;
   --color-accent-secondary: #{$purple-400};
   --color-accent-tertiary: #{$mint-250};
   --color-accent-quaternary: #{$pink-400};
-  --color-accent-overlay: #{$mint-250-10};
-  --color-accent-select: #{$mint-150-60};
+  --color-accent-overlay: #{$mint-150-60};
+  --color-accent-select: #{$mint-250-10};
 
   --color-accent-success: #{$green-500};
   --color-background-success: #{$green-950};
@@ -124,6 +127,9 @@ $grayish-red: #bfbfbf;
   --color-foreground-error: #{$red-500};
   --color-accent-info: #{$blue-500};
   --color-background-info: #{$blue-950};
+  --color-background-default: #{$gray-950};
+  --color-accent-default: #{$gray-800};
+  --color-icon-default: #{$grayish-blue-500};
 
   --color-background-primary: #{$gray-950};
   --color-background-secondary: #{$black};

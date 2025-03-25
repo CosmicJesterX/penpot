@@ -62,8 +62,14 @@
         on-navigate
         (mf/use-callback
          (fn [thread]
-           (st/emit! (-> (dwcm/navigate thread)
-                         (with-meta {::ev/origin "dashboard"})))))]
+           (st/emit! (-> (dwcm/navigate-to-comment-from-dashboard thread)
+                         (with-meta {::ev/origin "dashboard"})))))
+
+        on-read-all
+        (mf/use-callback
+         (mf/deps team-id)
+         (fn []
+           (st/emit! (dcm/mark-all-threads-as-read team-id))))]
 
     (mf/use-effect
      (mf/deps team-id)
@@ -82,7 +88,16 @@
       [:div {:class (stl/css :dropdown :comments-section :comment-threads-section)}
        [:div {:class (stl/css :header)}
         [:h3 {:class (stl/css :header-title)} (tr "dashboard.notifications")]
-        [:> icon-button* {:variant "ghost"
+        (when (seq tgroups)
+          [:> icon-button* {:class (stl/css :mark-all-as-read-button :notifications-button)
+                            :variant "action"
+                            :tab-index (if show? "0" "-1")
+                            :aria-label (tr "label.mark-all-as-read")
+                            :on-click on-read-all
+                            :icon "tick"}])
+
+        [:> icon-button* {:class (stl/css :notifications-button)
+                          :variant "action"
                           :tab-index (if show? "0" "-1")
                           :aria-label (tr "labels.close")
                           :on-click on-hide-comments

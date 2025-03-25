@@ -1,7 +1,7 @@
-use skia_safe as skia;
+use skia_safe::{self as skia, Matrix};
 use std::array::TryFromSliceError;
 
-use crate::math::Point;
+type Point = (f32, f32);
 
 fn stringify_slice_err(_: TryFromSliceError) -> String {
     format!("Error deserializing path")
@@ -143,5 +143,9 @@ impl Path {
 
     pub fn is_open(&self) -> bool {
         self.open
+    }
+
+    pub fn transform(&mut self, mtx: &Matrix) {
+        self.skia_path.transform(mtx);
     }
 }

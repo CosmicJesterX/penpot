@@ -12,6 +12,7 @@
    [app.common.exceptions :as ex]
    [app.common.flags :as flags]
    [app.common.schema :as sm]
+   [app.common.uri :as u]
    [app.common.version :as v]
    [app.util.overrides]
    [app.util.time :as dt]
@@ -228,19 +229,16 @@
     [:objects-storage-s3-endpoint {:optional true} ::sm/uri]
     [:objects-storage-s3-io-threads {:optional true} ::sm/int]]))
 
-(def default-flags
-  [:enable-backend-api-doc
-   :enable-backend-openapi-doc
-   :enable-backend-worker
-   :enable-secure-session-cookies
-   :enable-email-verification
-   :enable-v2-migration])
-
 (defn- parse-flags
   [config]
-  (flags/parse flags/default
-               default-flags
-               (:flags config)))
+  (let [public-uri  (c/get config :public-uri)
+        public-uri  (some-> public-uri (u/uri))
+        extra-flags (if (and public-uri
+                             (= (:scheme public-uri) "http")
+                             (not= (:host public-uri) "localhost"))
+                      #{:disable-secure-session-cookies}
+                      #{})]
+    (flags/parse flags/default extra-flags (:flags config))))
 
 (defn read-env
   [prefix]

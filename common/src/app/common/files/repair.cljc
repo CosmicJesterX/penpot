@@ -320,6 +320,35 @@
             (pcb/with-file-data file-data)
             (pcb/update-shapes shape-ids detach-shape))))))
 
+
+(defmethod repair-error :shape-ref-cycle
+  [_ {:keys [shape args] :as error} file-data _]
+  (let [repair-component
+        (fn [component]
+          (let [objects   (:objects component) ;; we only have encounter this on deleted components,
+                                               ;; so the relevant objects are inside the component
+                to-detach (->> (:cycles-ids args)
+                               (map #(get objects %))
+                               (map #(ctn/get-head-shape objects %))
+                               (map :id)
+                               distinct
+                               (mapcat #(ctn/get-children-in-instance objects %))
+                               (map :id)
+                               set)]
+
+            (update component :objects
+                    (fn [objects]
+                      (reduce-kv (fn [acc k v]
+                                   (if (contains? to-detach k)
+                                     (assoc acc k (ctk/detach-shape v))
+                                     (assoc acc k v)))
+                                 {}
+                                 objects)))))]
+    (log/dbg :hint "repairing component :shape-ref-cycle" :id (:id shape) :name (:name shape))
+    (-> (pcb/empty-changes nil nil)
+        (pcb/with-library-data file-data)
+        (pcb/update-component (:id shape) repair-component))))
+
 (defmethod repair-error :shape-ref-in-main
   [_ {:keys [shape page-id] :as error} file-data _]
   (let [repair-shape
@@ -467,7 +496,7 @@
   (let [repair-shape
         (fn [shape]
           ;; Remove the swap slot
-          (log/debug :hint (str "  -> remove swap-slot"))
+          (log/debug :hint "  -> remove swap-slot")
           (ctk/remove-swap-slot shape))]
 
     (log/dbg :hint "repairing shape :misplaced-slot" :id (:id shape) :name (:name shape) :page-id page-id)
@@ -542,6 +571,41 @@
     (-> (pcb/empty-changes nil page-id)
         (pcb/with-file-data file-data)
         (pcb/update-shapes [(:id shape)] repair-shape))))
+
+(defmethod repair-error :not-a-variant
+  [_ error file _]
+  (log/error :hint "Variant error code, we don't want to auto repair it for now" :code (:code error))
+  file)
+
+(defmethod repair-error :invalid-variant-id
+  [_ error file _]
+  (log/error :hint "Variant error code, we don't want to auto repair it for now" :code (:code error))
+  file)
+
+(defmethod repair-error :invalid-variant-properties
+  [_ error file _]
+  (log/error :hint "Variant error code, we don't want to auto repair it for now" :code (:code error))
+  file)
+
+(defmethod repair-error :variant-not-main
+  [_ error file _]
+  (log/error :hint "Variant error code, we don't want to auto repair it for now" :code (:code error))
+  file)
+
+(defmethod repair-error :parent-not-variant
+  [_ error file _]
+  (log/error :hint "Variant error code, we don't want to auto repair it for now" :code (:code error))
+  file)
+
+(defmethod repair-error :variant-bad-name
+  [_ error file _]
+  (log/error :hint "Variant error code, we don't want to auto repair it for now" :code (:code error))
+  file)
+
+(defmethod repair-error :variant-no-properties
+  [_ error file _]
+  (log/error :hint "Variant error code, we don't want to auto repair it for now" :code (:code error))
+  file)
 
 (defmethod repair-error :default
   [_ error file _]

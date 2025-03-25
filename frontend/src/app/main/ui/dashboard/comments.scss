@@ -14,7 +14,6 @@
 
 .thread-groups {
   height: calc(100% - $s-32);
-  overflow-y: scroll;
   max-height: $s-440;
   overflow: auto;
 }
@@ -72,6 +71,7 @@
   max-height: $s-480;
   min-height: $s-200;
   position: absolute;
+  overflow: hidden;
   width: 100%;
   z-index: $z-index-4;
 
@@ -86,6 +86,7 @@
   height: $s-40;
   align-items: center;
   padding: 0 $s-12;
+  gap: $s-4;
 }
 
 .header-title {
@@ -94,4 +95,14 @@
   line-height: 1.28;
   flex-grow: 1;
   text-transform: uppercase;
+}
+
+.notifications-button {
+  &:hover {
+    cursor: pointer;
+  }
+  &.mark-all-as-read-button {
+    border-radius: $s-8;
+    border: $s-1 solid;
+  }
 }

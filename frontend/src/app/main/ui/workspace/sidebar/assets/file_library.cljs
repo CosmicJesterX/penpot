@@ -9,6 +9,7 @@
   (:require
    [app.common.data :as d]
    [app.common.data.macros :as dm]
+   [app.common.files.variant :as cfv]
    [app.common.types.components-list :as ctkl]
    [app.main.data.event :as ev]
    [app.main.data.workspace :as dw]
@@ -196,21 +197,19 @@
         on-asset-click
         (mf/use-fn
          (mf/deps file-id selected)
-         (fn [asset-type asset-groups asset-id default-click event]
+         (fn [asset-type asset-groups event asset-id]
            (cond
              (kbd/mod? event)
              (do
                (dom/stop-propagation event)
-               (st/emit! (dw/toggle-selected-assets file-id asset-id asset-type)))
+               (st/emit! (dw/toggle-selected-assets file-id asset-id asset-type))
+               true)
 
              (kbd/shift? event)
              (do
                (dom/stop-propagation event)
-               (extend-selected selected asset-type asset-groups asset-id file-id))
-
-             :else
-             (when default-click
-               (default-click event)))))
+               (extend-selected selected asset-type asset-groups asset-id file-id)
+               true))))
 
         on-component-click
         (mf/use-fn (mf/deps on-asset-click) (partial on-asset-click :components))
@@ -250,7 +249,7 @@
      (when ^boolean show-components?
        [:& components-section
         {:file-id file-id
-         :local? is-local
+         :is-local is-local
          :components components
          :listing-thumbs? listing-thumbs?
          :open? (or ^boolean force-open-components?
@@ -322,7 +321,7 @@
          (tr "workspace.assets.not-found")]])]))
 
 (mf/defc file-library*
-  [{:keys [file is-local is-default-open? filters]}]
+  [{:keys [file is-local is-default-open filters]}]
   (let [file-id      (:id file)
         file-name    (:name file)
         page-id      (dm/get-in file [:data :pages 0])
@@ -345,8 +344,9 @@
 
         filtered-components
         (mf/with-memo [filters library]
-          (-> (into [] (ctkl/components-seq library))
-              (cmm/apply-filters filters)))
+          (as-> (into [] (ctkl/components-seq library)) $
+            (cmm/apply-filters $ filters)
+            (remove #(cfv/is-secondary-variant? % library) $)))
 
         filtered-media
         (mf/with-memo [filters media]
@@ -378,7 +378,7 @@
           ;; if the user has closed it specifically, respect that
           false
           (or force-lib-open?
-              (d/nilv (:library open-status) is-default-open?)))
+              (d/nilv (:library open-status) is-default-open)))
 
         unselect-all
         (mf/use-fn
