@@ -10,11 +10,11 @@
    [app.common.files.helpers :as cfh]
    [app.common.logging :as l]
    [app.common.thumbnails :as thc]
+   [app.common.types.component :as ctc]
    [app.common.uuid :as uuid]
    [app.main.data.changes :as dch]
    [app.main.data.helpers :as dsh]
    [app.main.data.persistence :as-alias dps]
-   [app.main.data.workspace.common :as dwc]
    [app.main.data.workspace.notifications :as-alias wnt]
    [app.main.rasterizer :as thr]
    [app.main.refs :as refs]
@@ -185,11 +185,11 @@
                      (rx/filter (ptk/type? ::clear-thumbnail))
                      (rx/filter #(= (deref %) object-id))))))))))
 
-(defn- extract-root-frame-changes
+(defn- extract-frame-changes
   "Process a changes set in a commit to extract the frames that are changing"
   [page-id [event [old-data new-data]]]
-  (let [changes (:changes event)
 
+  (let [changes (:changes event)
         lookup-data-objects
         (fn [data page-id]
           (dm/get-in data [:pages-index page-id :objects]))
@@ -206,21 +206,28 @@
 
         get-frame-ids
         (fn get-frame-ids [id]
-          (let [old-objects  (lookup-data-objects old-data page-id)
-                new-objects  (lookup-data-objects new-data page-id)
+          (let [old-objects     (lookup-data-objects old-data page-id)
+                new-objects     (lookup-data-objects new-data page-id)
 
-                new-shape    (get new-objects id)
-                old-shape    (get old-objects id)
+                new-shape       (get new-objects id)
+                old-shape       (get old-objects id)
 
-                old-frame-id (if (cfh/frame-shape? old-shape) id (:frame-id old-shape))
-                new-frame-id (if (cfh/frame-shape? new-shape) id (:frame-id new-shape))]
+                old-frame-id    (if (cfh/frame-shape? old-shape) id (:frame-id old-shape))
+                new-frame-id    (if (cfh/frame-shape? new-shape) id (:frame-id new-shape))
+
+                root-frame-old? (cfh/root-frame? old-objects old-frame-id)
+                root-frame-new? (cfh/root-frame? new-objects new-frame-id)
+                instance-root?  (ctc/instance-root? new-shape)]
 
             (cond-> #{}
-              (cfh/root-frame? old-objects old-frame-id)
-              (conj old-frame-id)
+              root-frame-old?
+              (conj ["frame" old-frame-id])
 
-              (cfh/root-frame? new-objects new-frame-id)
-              (conj new-frame-id)
+              root-frame-new?
+              (conj ["frame" new-frame-id])
+
+              instance-root?
+              (conj ["component" id])
 
               (and (uuid? (:frame-id old-shape))
                    (not= uuid/zero (:frame-id old-shape)))
@@ -267,7 +274,7 @@
                  (rx/map deref)
                  (rx/observe-on :async)
                  (rx/with-latest-from workspace-data-s)
-                 (rx/merge-map (partial extract-root-frame-changes page-id))
+                 (rx/merge-map (partial extract-frame-changes page-id))
                  (rx/tap #(l/trc :hint "inconming change" :origin "all" :frame-id (dm/str %)))
                  (rx/share))
 
@@ -282,21 +289,15 @@
               ;; and interrupt any ongoing update-thumbnail process
               ;; related to current frame-id
               (->> all-commits-s
-                   (rx/mapcat (fn [frame-id]
-                                (rx/of (clear-thumbnail file-id page-id frame-id "frame")
-                                       (clear-thumbnail file-id page-id frame-id "component")))))
+                   (rx/mapcat (fn [[tag frame-id]]
+                                (rx/of (clear-thumbnail file-id page-id frame-id tag)))))
 
               ;; Generate thumbnails in batches, once user becomes
               ;; inactive for some instant.
               (->> all-commits-s
                    (rx/buffer-until notifier-s)
                    (rx/mapcat #(into #{} %))
-                   (rx/map #(update-thumbnail file-id page-id % "frame" "watch-state-changes"))))
-
-             ;; WARNING: This is a workaround for an AB test, in case we consolidate this change we should
-             ;; find a better way to handle this.
-             (->> notifier-s
-                  (rx/take 1)
-                  (rx/map dwc/set-workspace-visited))
+                   (rx/map (fn [[tag frame-id]]
+                             (update-thumbnail file-id page-id frame-id tag "watch-state-changes")))))
 
              (rx/take-until stopper-s))))))

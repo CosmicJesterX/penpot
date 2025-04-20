@@ -41,7 +41,7 @@
 
     ptk/WatchEvent
     (watch [_ _ _]
-      (rx/of (features/initialize (or features #{}))))))
+      (rx/of (features/initialize features)))))
 
 (defn- fetch-team
   [& {:keys [file-id]}]
@@ -98,7 +98,7 @@
   (ptk/reify ::fetch-objects-bundle
     ptk/WatchEvent
     (watch [_ state _]
-      (let [features (features/get-team-enabled-features state)]
+      (let [features (get state :features)]
         (->> (rx/zip
               (repo/cmd! :get-font-variants {:file-id file-id :share-id share-id})
               (repo/cmd! :get-page {:file-id file-id
@@ -143,17 +143,7 @@
         nil)
 
       (do
-        (st/emit! (ptk/reify ::initialize-render-objects
-                    ptk/WatchEvent
-                    (watch [_ _ stream]
-                      (rx/merge
-                       (rx/of (fetch-team :file-id file-id))
-
-                       (->> stream
-                            (rx/filter (ptk/type? ::team-fetched))
-                            (rx/observe-on :async)
-                            (rx/map (constantly params))
-                            (rx/map fetch-objects-bundle))))))
+        (st/emit! (fetch-objects-bundle :file-id file-id :page-id page-id :share-id share-id :object-id object-id))
 
         (if (uuid? object-id)
           (mf/html
@@ -237,7 +227,7 @@
   (ptk/reify ::fetch-components-bundle
     ptk/WatchEvent
     (watch [_ state _]
-      (let [features (features/get-team-enabled-features state)]
+      (let [features (get state :features)]
         (->> (repo/cmd! :get-file {:id file-id :features features})
              (rx/map (fn [file] #(assoc % :file file))))))))
 
@@ -309,7 +299,6 @@
 
 (defn ^:export init
   []
-  (st/emit! (features/initialize))
   (init-ui))
 
 (defn reinit

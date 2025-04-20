@@ -10,7 +10,6 @@
    [app.main.ui.workspace.tokens.tinycolor :as tinycolor]
    [app.main.ui.workspace.tokens.token :as wtt]
    [app.main.ui.workspace.tokens.warnings :as wtw]
-   [app.util.i18n :refer [tr]]
    [app.util.time :as dt]
    [beicon.v2.core :as rx]
    [cuerdas.core :as str]
@@ -25,7 +24,7 @@
   "Initiates the StyleDictionary instance.
   Setup transforms from tokens-studio used to parse and resolved token values."
   (do
-    (sd-transforms/registerTransforms sd)
+    (sd-transforms/register sd)
     (.registerFormat sd #js {:name "custom/json"
                              :format (fn [^js res]
                                        (.-tokens (.-dictionary res)))})
@@ -192,9 +191,11 @@
     config)
 
   (build-dictionary [_]
-    (let [config' (clj->js config)]
+    (let [platform "json"
+          config' (clj->js config)]
       (-> (sd. config')
-          (.buildAllPlatforms "json")
+          (.buildAllPlatforms platform)
+          (p/then #(.getPlatformTokens ^js % platform))
           (p/then #(.-allTokens ^js %))))))
 
 (defn resolve-tokens-tree+
@@ -240,7 +241,21 @@
 
 ;; === Import
 
-(defn reference-errors
+(defn- decode-single-set-json
+  "Decodes parsed json containing single token set and converts to library"
+  [this set-name tokens]
+  (assert (map? tokens) "expected a map data structure for `data`")
+
+  (ctob/add-set this (ctob/make-token-set :name (ctob/normalize-set-name set-name)
+                                          :tokens (ctob/flatten-nested-tokens-json tokens ""))))
+
+(defn- decode-single-set-legacy-json
+  "Decodes parsed legacy json containing single token set and converts to library"
+  [this set-name tokens]
+  (assert (map? tokens) "expected a map data structure for `data`")
+  (decode-single-set-json this set-name (ctob/legacy-nodes->dtcg-nodes tokens)))
+
+(defn- reference-errors
   "Extracts reference errors from StyleDictionary."
   [err]
   (let [[header-1 header-2 & errors] (str/split err "\n")]
@@ -249,44 +264,63 @@
            (= header-2 "Reference Errors:"))
       errors)))
 
-(defn process-json-stream [data-stream]
-  (->> data-stream
-       (rx/map (fn [data]
-                 (try
-                   (t/decode-str data)
-                   (catch js/Error e
-                     (throw (wte/error-ex-info :error.import/json-parse-error data e))))))
-       (rx/map (fn [json-data]
-                 (try
-                   (if-not (ctob/has-legacy-format? json-data)
-                     (ctob/decode-dtcg-json (ctob/ensure-tokens-lib nil) json-data)
-                     (ctob/decode-legacy-json (ctob/ensure-tokens-lib nil) json-data))
-                   (catch js/Error e
-                     (throw (wte/error-ex-info :error.import/invalid-json-data json-data e))))))
-       (rx/mapcat (fn [tokens-lib]
+(defn name-error
+  "Extracts name error out of malli schema error during import."
+  [err]
+  (let [schema-error (some-> (ex-data err)
+                             (get-in [:app.common.schema/explain :errors])
+                             (first))
+        name-error? (= (:in schema-error) [:name])]
+    (when name-error?
+      (wte/error-ex-info :error.import/invalid-token-name (:value schema-error) err))))
+
+(defn process-json-stream
+  ([data-stream]
+   (process-json-stream nil data-stream))
+  ([params data-stream]
+   (let [{:keys [file-name]} params]
+     (->> data-stream
+          (rx/map (fn [data]
                     (try
-                      (-> (ctob/get-all-tokens tokens-lib)
-                          (resolve-tokens-with-errors+)
-                          (p/then (fn [_] tokens-lib))
-                          (p/catch (fn [sd-error]
-                                     (let [reference-errors (reference-errors sd-error)
-                                           err (if reference-errors
-                                                 (wte/error-ex-info :error.import/style-dictionary-reference-errors reference-errors sd-error)
-                                                 (wte/error-ex-info :error.import/style-dictionary-unknown-error sd-error sd-error))]
-                                       (throw err)))))
+                      (t/decode-str data)
                       (catch js/Error e
-                        (p/rejected (wte/error-ex-info :error.import/style-dictionary-unknown-error "" e))))))))
+                        (throw (wte/error-ex-info :error.import/json-parse-error data e))))))
+          (rx/map (fn [json-data]
+                    (let [single-set? (ctob/single-set? json-data)
+                          json-format (ctob/get-json-format json-data)]
+                      (try
+                        (cond
+                          (and single-set?
+                               (= :json-format/legacy json-format))
+                          (decode-single-set-legacy-json (ctob/ensure-tokens-lib nil) file-name json-data)
 
-;; === Errors
+                          (and single-set?
+                               (= :json-format/dtcg json-format))
+                          (decode-single-set-json (ctob/ensure-tokens-lib nil) file-name json-data)
 
-(defn humanize-errors [{:keys [errors] :as token}]
-  (->> (map (fn [err]
-              (case (:error/code err)
-                ;; TODO: This needs translations
-                :error.style-dictionary/missing-reference (tr "workspace.token.token-not-resolved" (:error/value err))
-                nil))
-            errors)
-       (str/join "\n")))
+                          (= :json-format/legacy json-format)
+                          (ctob/decode-legacy-json (ctob/ensure-tokens-lib nil) json-data)
+
+                          :else
+                          (ctob/decode-dtcg-json (ctob/ensure-tokens-lib nil) json-data))
+
+                        (catch js/Error e
+                          (let [err (or (name-error e)
+                                        (wte/error-ex-info :error.import/invalid-json-data json-data e))]
+                            (throw err)))))))
+          (rx/mapcat (fn [tokens-lib]
+                       (try
+                         (-> (ctob/get-all-tokens tokens-lib)
+                             (resolve-tokens-with-errors+)
+                             (p/then (fn [_] tokens-lib))
+                             (p/catch (fn [sd-error]
+                                        (let [reference-errors (reference-errors sd-error)
+                                              err (if reference-errors
+                                                    (wte/error-ex-info :error.import/style-dictionary-reference-errors reference-errors sd-error)
+                                                    (wte/error-ex-info :error.import/style-dictionary-unknown-error sd-error sd-error))]
+                                          (throw err)))))
+                         (catch js/Error e
+                           (p/rejected (wte/error-ex-info :error.import/style-dictionary-unknown-error "" e))))))))))
 
 ;; === Hooks
 
@@ -336,7 +370,7 @@
   [tokens & {:keys [interactive?]}]
   (let [state* (mf/use-state tokens)]
     (mf/with-effect [tokens interactive?]
-      (when (seq tokens)
+      (if (seq tokens)
         (let [tpoint  (dt/tpoint-ms)
               promise (if interactive?
                         (resolve-tokens-interactive+ tokens)
@@ -346,5 +380,6 @@
                (p/fmap (fn [resolved-tokens]
                          (let [elapsed (tpoint)]
                            (l/dbg :hint "use-resolved-tokens*" :elapsed elapsed)
-                           (reset! state* resolved-tokens))))))))
+                           (reset! state* resolved-tokens))))))
+        (reset! state* tokens)))
     @state*))

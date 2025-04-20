@@ -10,6 +10,7 @@
    [app.main.style :as stl])
   (:require
    [app.common.data :as d]
+   [app.main.constants :refer [max-input-length]]
    [app.main.ui.ds.controls.shared.options-dropdown :refer [options-dropdown*]]
    [app.main.ui.ds.foundations.assets.icon :refer [icon* icon-list] :as i]
    [app.util.array :as array]
@@ -60,6 +61,7 @@
    [:id {:optional true} :string]
    [:options [:vector schema:combobox-option]]
    [:class {:optional true} :string]
+   [:max-length {:optional true} :int]
    [:placeholder {:optional true} :string]
    [:disabled {:optional true} :boolean]
    [:default-selected {:optional true} :string]
@@ -69,10 +71,11 @@
 (mf/defc combobox*
   {::mf/props :obj
    ::mf/schema schema:combobox}
-  [{:keys [id options class placeholder disabled has-error default-selected on-change] :rest props}]
+  [{:keys [id options class placeholder disabled has-error default-selected on-change max-length] :rest props}]
   (let [open* (mf/use-state false)
         open  (deref open*)
 
+        ;;use-memo-equal
         selected* (mf/use-state  default-selected)
         selected  (deref selected*)
 
@@ -213,6 +216,11 @@
     (mf/with-effect [options]
       (mf/set-ref-val! options-ref options))
 
+    (mf/use-effect
+     (mf/deps default-selected)
+     (fn []
+       (reset! selected* default-selected)))
+
     [:div {:ref combobox-ref
            :class (stl/css-case
                    :combobox-wrapper true
@@ -240,6 +248,7 @@
                 :aria-activedescendant focused
                 :class (stl/css :input)
                 :data-testid "combobox-input"
+                :maxlength (d/nilv max-length max-input-length)
                 :disabled disabled
                 :value selected
                 :on-change on-input-change

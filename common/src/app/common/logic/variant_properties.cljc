@@ -7,7 +7,9 @@
   (:require
    [app.common.data :as d]
    [app.common.files.changes-builder :as pcb]
+   [app.common.files.helpers :as cfh]
    [app.common.files.variant :as cfv]
+   [app.common.types.component :as ctk]
    [app.common.types.components-list :as ctcl]
    [app.common.types.variant :as ctv]
    [cuerdas.core :as str]))
@@ -59,14 +61,14 @@
 
 
 (defn generate-add-new-property
-  [changes variant-id & {:keys [fill-values?]}]
+  [changes variant-id & {:keys [fill-values? property-name]}]
   (let [data               (pcb/get-library-data changes)
         objects            (pcb/get-objects changes)
         related-components (cfv/find-variant-components data objects variant-id)
 
-        props              (-> related-components first :variant-properties)
+        props              (-> related-components last :variant-properties)
         next-prop-num      (ctv/next-property-number props)
-        property-name      (str ctv/property-prefix next-prop-num)
+        property-name      (or property-name (str ctv/property-prefix next-prop-num))
 
         [_ changes]
         (reduce (fn [[num changes] component]
@@ -91,3 +93,112 @@
                 related-components)]
     changes))
 
+(defn- generate-make-shape-no-variant
+  [changes shape]
+  (let [data      (pcb/get-library-data changes)
+        component (ctcl/get-component data (:component-id shape) true)
+        new-name (str (:name component)
+                      " / "
+                      (if (ctk/is-variant? shape)
+                        (str/replace (:variant-name shape) #", " " / ")
+                        (:name shape)))
+        [cpath cname] (cfh/parse-path-name new-name)]
+    (-> changes
+        (pcb/update-component (:component-id shape)
+                              #(-> (dissoc % :variant-id :variant-properties)
+                                   (assoc :name cname
+                                          :path cpath))
+                              {:apply-changes-local-library? true})
+        (pcb/update-shapes [(:id shape)]
+                           #(-> (dissoc % :variant-id :variant-name)
+                                (assoc :name new-name))))))
+
+(defn generate-make-shapes-no-variant
+  [changes shapes]
+  (reduce generate-make-shape-no-variant changes shapes))
+
+
+(defn- generate-new-properties-from-variant
+  [shape min-props data container-name base-properties]
+  (let [component (ctcl/get-component data (:component-id shape) true)
+        add-name? (not= (:name component) container-name)
+        props     (ctv/merge-properties base-properties
+                                        (:variant-properties component))
+        new-props (- min-props
+                     (+ (count props)
+                        (if add-name? 1 0)))
+        props     (ctv/add-new-props props (repeat new-props ""))]
+
+    (if add-name?
+      (ctv/add-new-prop props (:name component))
+      props)))
+
+(defn- generate-new-properties-from-non-variant
+  [shape min-props container-name base-properties]
+  (let [;; Remove container name from shape name if present
+        shape-name (ctv/remove-prefix (:name shape) container-name)]
+    (ctv/path-to-properties shape-name base-properties min-props)))
+
+
+(defn generate-make-shapes-variant
+  [changes shapes variant-container]
+  (let [data           (pcb/get-library-data changes)
+        objects        (pcb/get-objects changes)
+        variant-id     (:id variant-container)
+
+        ;; If we are cut-pasting a variant-container, this will be null
+        ;; because it hasn't any shapes yet
+        first-comp-id  (->> variant-container
+                            :shapes
+                            first
+                            (get objects)
+                            :component-id)
+
+        base-props     (->> (get-in data [:components first-comp-id :variant-properties])
+                            (map #(assoc % :value "")))
+        num-base-props (count base-props)
+
+        [cpath cname]  (cfh/parse-path-name (:name variant-container))
+        container-name (:name variant-container)
+
+        generate-new-properties
+        (fn [shape min-props]
+          (if (ctk/is-variant? shape)
+            (generate-new-properties-from-variant shape min-props data container-name base-props)
+            (generate-new-properties-from-non-variant shape min-props container-name base-props)))
+
+        total-props    (reduce (fn [m shape]
+                                 (max m (count (generate-new-properties shape num-base-props))))
+                               0
+                               shapes)
+
+        num-new-props  (if (or (zero? num-base-props)
+                               (< total-props num-base-props))
+                         0
+                         (- total-props num-base-props))
+
+        changes        (nth
+                        (iterate #(generate-add-new-property % variant-id) changes)
+                        num-new-props)
+
+        changes        (pcb/update-shapes changes (map :id shapes)
+                                          #(assoc % :variant-id variant-id
+                                                  :name (:name variant-container)))]
+    (reduce
+     (fn [changes shape]
+       (if (or (zero? num-base-props)
+               (= variant-id (:variant-id shape)))
+         changes ;; do nothing more if we aren't changing the parent or there are no base props
+         (let [props               (generate-new-properties shape total-props)
+               variant-name        (ctv/properties-to-name props)]
+           (-> (pcb/update-component changes
+                                     (:component-id shape)
+                                     #(assoc % :variant-id variant-id
+                                             :variant-properties props
+                                             :name cname
+                                             :path cpath)
+                                     {:apply-changes-local-library? true})
+               (pcb/update-shapes [(:id shape)]
+                                  #(assoc % :variant-name variant-name))))))
+     changes
+     shapes)))

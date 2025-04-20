@@ -10,10 +10,40 @@
 
 ### :sparkles: New features
 
+- Update board presets with a newer devices [Taiga #10610](https://tree.taiga.io/project/penpot/us/10610)
+- Propagate "sharing a prototype" to editors and viewers [Taiga #8853](https://tree.taiga.io/project/penpot/us/8853)
+- Design improvements to the Invitations page with an empty state [Taiga #4554](https://tree.taiga.io/project/penpot/us/4554)
+
 ### :bug: Bugs fixed
 
+- Fix path having a wrong selrect [Taiga #10257](https://tree.taiga.io/project/penpot/issue/10257)
+- Fix SVG `stroke-linecap` property when importing SVGs [Taiga #9489](https://tree.taiga.io/project/penpot/issue/9489)
+- Fix position problems cutting-pasting a component [Taiga #10677](https://tree.taiga.io/project/penpot/issue/10677)
+- Fix design tab has a horizontal scroll [Taiga #10660](https://tree.taiga.io/project/penpot/issue/10660)
+- Fix long file names being clipped when longer than allowed length [Taiga #10662](https://tree.taiga.io/project/penpot/issue/10662)
+- Fix problem with error detail in toast [Taiga #10519](https://tree.taiga.io/project/penpot/issue/10519)
+- Fix view mode error when an external user tries to export something from a prototype using a shared link [Taiga #10251](https://tree.taiga.io/project/penpot/issue/10251)
+- Fix merge path nodes with only one node selected [Taiga #9626](https://tree.taiga.io/project/penpot/issue/9626)
+- Fix problem with import errors [Taiga #10040](https://tree.taiga.io/project/penpot/issue/10040)
+- Fix color gradient on texts [Taiga Issue #7488](https://tree.taiga.io/project/penpot/issue/7488)
 
-## 2.6.0 (Unreleased)
+## 2.6.2 (Unreleased)
+
+### :bug: Bugs fixed
+
+- Increase the height of the right sidebar dropdowns [Taiga #10615](https://tree.taiga.io/project/penpot/issue/10615)
+- Fix scroll on token themes modal [Taiga #10745](https://tree.taiga.io/project/penpot/issue/10745)
+- Fix unexpected exception on path editor on merge segments when undo stack is empty
+
+## 2.6.1
+
+### :bug: Bugs fixed
+
+- Fix webhooks not shown in list [Taiga #10763](https://tree.taiga.io/project/penpot/issue/10763)
+- Fix colorpicker scroll when dropdown displayed [Taiga #10696](https://tree.taiga.io/project/penpot/issue/10696)
+- Clean internal workspace state on exit or url changed [Taiga #10619](https://tree.taiga.io/project/penpot/issue/10619)
+
+## 2.6.0
 
 ### :rocket: Epics and highlights
 
@@ -37,6 +67,8 @@
 - [DESIGN TOKENS] Integration with components.
 - [DESIGN TOKENS] Import and export tokens from a JSON file.
 - [DESIGN TOKENS] Apply Themes and Sets at document level.
+- Add more descriptive tooltip to boards for first time users [Taiga #9426](https://tree.taiga.io/project/penpot/us/9426)
+- First State of a Project Changes Consolidation [Taia #10605](https://tree.taiga.io/project/penpot/us/10605)
 
 ### :bug: Bugs fixed
 
@@ -51,6 +83,16 @@
 - Fix problem with default shadows value in plugins [Plugins #191](https://github.com/penpot/penpot-plugins/issues/191)
 - Fix problem with constraints when creating group [Taiga #10455](https://tree.taiga.io/project/penpot/issue/10455)
 - Fix opening pen with shortcut multiple times breaks toolbar [Taiga #10566](https://tree.taiga.io/project/penpot/issue/10566)
+- Fix actions when workspace is visited first time [Taiga #10548](https://tree.taiga.io/project/penpot/issue/10548)
+- Chat icon overlaps "Show" button in carrousel section [Taiga #10542](https://tree.taiga.io/project/penpot/issue/10542)
+- Fix assets name on inspect tab [Taiga #10630](https://tree.taiga.io/project/penpot/issue/10630)
+- Fix chat icon overlaps "Show" button in carrousel section [Taiga #10542](https://tree.taiga.io/project/penpot/issue/10542)
+- Fix incorrect handling of background task result (now task rows are properly marked as completed)
+- Fix available size of resize handler [Taiga #10639](https://tree.taiga.io/project/penpot/issue/10639)
+- Internal error when install a plugin by penpothub - Try plugin [Taiga #10542](https://tree.taiga.io/project/penpot/issue/10542)
+- Add character limitation to asset inputs [Taiga #10669](https://tree.taiga.io/project/penpot/issue/10669)
+- Fix Storybook link 'list of all available icons' wrong path [Taiga #10705](https://tree.taiga.io/project/penpot/issue/10705)
+
 
 ## 2.5.4
 

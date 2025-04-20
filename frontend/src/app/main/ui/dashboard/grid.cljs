@@ -17,7 +17,6 @@
    [app.main.data.notifications :as ntf]
    [app.main.data.project :as dpj]
    [app.main.data.team :as dtm]
-   [app.main.features :as features]
    [app.main.fonts :as fonts]
    [app.main.rasterizer :as thr]
    [app.main.refs :as refs]
@@ -60,7 +59,7 @@
   (->> (wrk/ask! {:cmd :thumbnails/generate-for-file
                   :revn revn
                   :file-id file-id
-                  :features (features/get-team-enabled-features @st/state)})
+                  :features (get @st/state :features)})
        (rx/mapcat (fn [{:keys [fonts] :as result}]
                     (->> (fonts/render-font-styles fonts)
                          (rx/map (fn [styles]
@@ -160,7 +159,7 @@
             [:span {:class (stl/css :num-assets)} (str "\u00A0(") (:count components) ")"]] ;; Unicode 00A0 is non-breaking space
            [:div {:class (stl/css :asset-list)}
             (for [component (:sample components)]
-              (let [root-id (or (:main-instance-id component) (:id component))] ;; Check for components-v2 in library
+              (let [root-id (:main-instance-id component)]
                 [:div {:class (stl/css :asset-list-item)
                        :key (str "assets-component-" (:id component))}
                  [:& render/component-svg {:root-shape (get-in component [:objects root-id])

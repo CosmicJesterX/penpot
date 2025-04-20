@@ -70,6 +70,7 @@ export class WorkspacePage extends BaseWebSocketPage {
     );
     this.toolbarOptions = page.getByTestId("toolbar-options");
     this.rectShapeButton = page.getByRole("button", { name: "Rectangle (R)" });
+    this.ellipseShapeButton = page.getByRole("button", { name: "Ellipse (E)" });
     this.moveButton = page.getByRole("button", { name: "Move (V)" });
     this.boardButton = page.getByRole("button", { name: "Board (B)" });
     this.toggleToolbarButton = page.getByRole("button", {
@@ -198,6 +199,13 @@ export class WorkspacePage extends BaseWebSocketPage {
     await this.page.mouse.up();
   }
 
+  async clickAt(x, y) {
+    await this.page.waitForTimeout(100);
+    await this.viewport.hover({ position: { x, y } });
+    await this.page.mouse.down();
+    await this.page.mouse.up();
+  }
+
   async panOnViewportAt(x, y, width, height) {
     await this.page.waitForTimeout(100);
     await this.viewport.hover({ position: { x, y } });
@@ -244,6 +252,9 @@ export class WorkspacePage extends BaseWebSocketPage {
 
   async clickAssets(clickOptions = {}) {
     await this.sidebar.getByText("Assets").click(clickOptions);
+  }
+  async clickLayers(clickOptions = {}) {
+    await this.sidebar.getByText("Layers").click(clickOptions);
   }
 
   async openLibrariesModal(clickOptions = {}) {

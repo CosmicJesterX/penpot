@@ -1,13 +1,18 @@
-use skia_safe as skia;
-use std::collections::{HashMap, HashSet};
-use uuid::Uuid;
-
+use crate::uuid::Uuid;
 use crate::view::Viewbox;
 use indexmap::IndexSet;
+use skia_safe as skia;
+use std::collections::{HashMap, HashSet};
 
 pub type Tile = (i32, i32);
+pub type TileWithDistance = (i32, i32, i32);
 
 pub const TILE_SIZE: f32 = 512.;
+
+// @see https://en.wikipedia.org/wiki/Taxicab_geometry
+pub fn manhattan_distance(a: (i32, i32), b: (i32, i32)) -> i32 {
+    (a.0 - b.0).abs() + (a.1 - b.1).abs()
+}
 
 pub fn get_tile_dimensions() -> skia::ISize {
     (TILE_SIZE as i32, TILE_SIZE as i32).into()
@@ -26,6 +31,14 @@ pub fn get_tiles_for_rect(rect: skia::Rect, tile_size: f32) -> (i32, i32, i32, i
 pub fn get_tiles_for_viewbox(viewbox: Viewbox) -> (i32, i32, i32, i32) {
     let tile_size = get_tile_size(viewbox);
     get_tiles_for_rect(viewbox.area, tile_size)
+}
+
+pub fn get_tiles_for_viewbox_with_interest(
+    viewbox: Viewbox,
+    interest: i32,
+) -> (i32, i32, i32, i32) {
+    let (sx, sy, ex, ey) = get_tiles_for_viewbox(viewbox);
+    (sx - interest, sy - interest, ex + interest, ey + interest)
 }
 
 pub fn get_tile_pos(viewbox: Viewbox, (x, y): Tile) -> (f32, f32) {
@@ -62,6 +75,16 @@ impl TileHashMap {
 
     pub fn get_shapes_at(&mut self, tile: Tile) -> Option<&IndexSet<Uuid>> {
         return self.grid.get(&tile);
+    }
+
+    pub fn remove_shape_at(&mut self, tile: Tile, id: Uuid) {
+        if let Some(shapes) = self.grid.get_mut(&tile) {
+            shapes.shift_remove(&id);
+        }
+
+        if let Some(tiles) = self.index.get_mut(&id) {
+            tiles.remove(&tile);
+        }
     }
 
     pub fn get_tiles_of(&mut self, shape_id: Uuid) -> Option<&HashSet<Tile>> {

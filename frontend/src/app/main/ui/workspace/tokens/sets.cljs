@@ -65,6 +65,11 @@
     (st/emit! (ptk/data-event ::ev/event {::ev/name "create-token-set" :name name})
               (dt/create-token-set name))))
 
+(defn group-edition-id
+  "Prefix editing groups `edition-id` so it can be differentiated from sets with the same id."
+  [edition-id]
+  (str "group-" edition-id))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; COMPONENTS
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -94,6 +99,7 @@
       :type "text"
       :on-blur on-submit
       :on-key-down on-key-down
+      :maxlength "256"
       :auto-focus true
       :placeholder (tr "workspace.token.set-edit-placeholder")
       :default-value default-value}]))
@@ -160,21 +166,23 @@
          (fn [event]
            (dom/prevent-default event)
            (dom/stop-propagation event)
-           (when-not is-editing
+           (when (and can-edit? (not is-editing))
              (st/emit! (dt/assign-token-set-context-menu
                         {:position (dom/get-client-position event)
                          :is-group true
                          :id id
+                         :edition-id (group-edition-id id)
                          :path tree-path})))))
 
         on-collapse-click
         (mf/use-fn
          (fn [event]
+           (dom/prevent-default event)
            (dom/stop-propagation event)
            (on-toggle-collapse tree-path)))
 
         on-double-click
-        (mf/use-fn (mf/deps id) #(on-start-edition id))
+        (mf/use-fn (mf/deps id) #(on-start-edition (group-edition-id id)))
 
         on-checkbox-click
         (mf/use-fn
@@ -226,6 +234,7 @@
          :on-submit on-edit-submit'}]
        [:*
         [:div {:class (stl/css :set-name)
+               :title label
                :on-double-click on-double-click
                :id label-id}
          label]
@@ -265,6 +274,7 @@
                         {:position (dom/get-client-position event)
                          :is-group false
                          :id id
+                         :edition-id id
                          :path tree-path})))))
 
         on-double-click
@@ -396,7 +406,7 @@
           :is-active (is-token-set-group-active path)
           :is-selected false
           :is-draggable is-draggable
-          :is-editing (= edition-id id)
+          :is-editing (= edition-id (group-edition-id id))
           :is-collapsed (collapsed? path)
           :on-select on-select
 
@@ -498,7 +508,7 @@
            (when (fn? on-start-edition)
              (on-start-edition v))))]
 
-    [:fieldset {:class (stl/css :sets-list)}
+    [:div {:class (stl/css :sets-list)}
      (if ^boolean empty-state?
        [:> text* {:as "span" :typography "body-small" :class (stl/css :empty-state-message-sets)}
         (tr "workspace.token.no-sets-create")]

@@ -16,8 +16,7 @@
    [app.main.data.tokens :as dt]
    [app.main.refs :as refs]
    [app.main.store :as st]
-   [app.main.ui.components.dropdown-menu :refer [dropdown-menu
-                                                 dropdown-menu-item*]]
+   [app.main.ui.components.dropdown-menu :refer [dropdown-menu dropdown-menu-item*]]
    [app.main.ui.components.title-bar :refer [title-bar]]
    [app.main.ui.context :as ctx]
    [app.main.ui.ds.buttons.button :refer [button*]]
@@ -40,6 +39,7 @@
    [app.util.i18n :refer [tr]]
    [app.util.webapi :as wapi]
    [beicon.v2.core :as rx]
+   [cuerdas.core :as str]
    [okulary.core :as l]
    [potok.v2.core :as ptk]
    [rumext.v2 :as mf]
@@ -233,6 +233,7 @@
 (mf/defc token-sets-section*
   {::mf/private true}
   [{:keys [resize-height] :as props}]
+
   (let [can-edit?
         (mf/use-ctx ctx/can-edit?)]
 
@@ -302,6 +303,16 @@
                                   tokens)]
             (ctob/group-by-type tokens)))
 
+        active-token-sets-names
+        (mf/with-memo [tokens-lib]
+          (some-> tokens-lib (ctob/get-active-themes-set-names)))
+
+        token-set-active?
+        (mf/use-fn
+         (mf/deps active-token-sets-names)
+         (fn [name]
+           (contains? active-token-sets-names name)))
+
         [empty-group filled-group]
         (mf/with-memo [tokens-by-type]
           (get-sorted-token-groups tokens-by-type))]
@@ -318,8 +329,18 @@
 
     [:*
      [:& token-context-menu]
-     [:& title-bar {:all-clickable true
-                    :title (tr "workspace.token.tokens-section-title" selected-token-set-name)}]
+     [:div {:class (stl/css :sets-header-container)}
+      [:span {:class (stl/css :sets-header)} (tr "workspace.token.tokens-section-title" selected-token-set-name)]
+      [:div {:class (stl/css :sets-header-status) :title (tr "workspace.token.inactive-set-description")}
+       ;; NOTE: when no set in tokens-lib, the selected-token-set-name
+       ;; will be `nil`, so for properly hide the inactive message we
+       ;; check that at least `selected-token-set-name` has a value
+       (when (and (some? selected-token-set-name)
+                  (not (token-set-active? selected-token-set-name)))
+         [:*
+          [:> i/icon* {:class (stl/css :sets-header-status-icon) :icon-id i/eye-off}]
+          [:span {:class (stl/css :sets-header-status-text)}
+           (tr "workspace.token.inactive-set")]])]]
 
      (for [type filled-group]
        (let [tokens (get tokens-by-type type)]
@@ -367,15 +388,17 @@
          (fn [event]
            (let [file (-> (dom/get-target event)
                           (dom/get-files)
-                          (first))]
+                          (first))
+                 file-name (str/replace (.-name file) ".json" "")]
              (->> (wapi/read-file-as-text file)
-                  (sd/process-json-stream)
+                  (sd/process-json-stream {:file-name file-name})
                   (rx/subs! (fn [lib]
                               (st/emit! (ptk/data-event ::ev/event {::ev/name "import-tokens"})
                                         (dt/import-tokens-lib lib)))
                             (fn [err]
                               (js/console.error err)
                               (st/emit! (ntf/show {:content (wte/humanize-errors [(ex-data err)])
+                                                   :detail (wte/detail-errors [(ex-data err)])
                                                    :type :toast
                                                    :level :error})))))
              (-> (mf/ref-val input-ref)
@@ -438,6 +461,7 @@
       [:div {:class (stl/css :resize-area-horiz)
              :on-pointer-down on-pointer-down-pages
              :on-lost-pointer-capture on-lost-pointer-capture-pages
-             :on-pointer-move on-pointer-move-pages}]
+             :on-pointer-move on-pointer-move-pages}
+       [:div {:class (stl/css :resize-handle-horiz)}]]
       [:> tokens-section* {:tokens-lib tokens-lib}]]
      [:> import-export-button*]]))

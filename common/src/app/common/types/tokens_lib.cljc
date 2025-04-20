@@ -9,6 +9,7 @@
    #?(:clj [app.common.fressian :as fres])
    [app.common.data :as d]
    [app.common.data.macros :as dm]
+   [app.common.files.helpers :as cfh]
    [app.common.schema :as sm]
    [app.common.time :as dt]
    [app.common.transit :as t]
@@ -320,6 +321,7 @@
            (assoc-in (concat [:tokens-tree] path) token)
            (assoc-in [:ids temp-id] token))))
    {:tokens-tree {} :ids {}} tokens))
+
 
 (defprotocol ITokenSet
   (update-name [_ set-name] "change a token set name while keeping the path")
@@ -665,20 +667,20 @@
      ["$value" :map]
      ["$type" :string]]]))
 
-(defn has-legacy-format?
+(defn get-json-format
   "Searches through parsed token file and returns:
-   - true when first node satisfies `legacy-node?` predicate
-   - false when first node satisfies `dtcg-node?` predicate
-   - nil if neither combination is found"
+   - `:json-format/legacy` when first node satisfies `legacy-node?` predicate
+   - `:json-format/dtcg` when first node satisfies `dtcg-node?` predicate
+   - `nil` if neither combination is found"
   ([data]
-   (has-legacy-format? data legacy-node? dtcg-node?))
+   (get-json-format data legacy-node? dtcg-node?))
   ([data legacy-node? dtcg-node?]
    (let [branch? map?
          children (fn [node] (vals node))
          check-node (fn [node]
                       (cond
-                        (legacy-node? node) true
-                        (dtcg-node? node) false
+                        (legacy-node? node) :json-format/legacy
+                        (dtcg-node? node) :json-format/dtcg
                         :else nil))
          walk (fn walk [node]
                 (lazy-seq
@@ -689,6 +691,10 @@
      (->> (walk data)
           (filter some?)
           first))))
+
+(defn single-set? [data]
+  (and (not (contains? data "$metadata"))
+       (not (contains? data "$themes"))))
 
 ;; DEPRECATED
 (defn walk-sets-tree-seq
@@ -799,7 +805,7 @@
          (map-indexed (fn [index item]
                         (assoc item :index index))))))
 
-(defn- flatten-nested-tokens-json
+(defn flatten-nested-tokens-json
   "Recursively flatten the dtcg token structure, joining keys with '.'."
   [tokens token-path]
   (reduce-kv
@@ -825,6 +831,24 @@
 ;; === Tokens Lib
 
 (declare make-tokens-lib)
+
+(defn legacy-nodes->dtcg-nodes [sets-data]
+  (walk/postwalk
+   (fn [node]
+     (cond-> node
+       (and (map? node)
+            (contains? node "value")
+            (sequential? (get node "value")))
+       (update "value"
+               (fn [seq-value]
+                 (map #(set/rename-keys % {"type" "$type"}) seq-value)))
+
+       (and (map? node)
+            (and (contains? node "type")
+                 (contains? node "value")))
+       (set/rename-keys  {"value" "$value"
+                          "type" "$type"})))
+   sets-data))
 
 (defprotocol ITokensLib
   "A library of tokens, sets and themes."
@@ -896,6 +920,7 @@ Will return a value that matches this schema:
                         themes
                         active-themes)))
         this)))
+
 
 
   (delete-set [_ set-name]
@@ -1227,18 +1252,15 @@ Will return a value that matches this schema:
         :none)))
 
   (get-active-themes-set-tokens [this]
-    (let [sets-order (get-ordered-set-names this)
-          active-themes (get-active-themes this)
-          order-theme-set (fn [theme]
-                            (filter #(contains? (set (:sets theme)) %) sets-order))]
-      (reduce
-       (fn [tokens theme]
-         (reduce
-          (fn [tokens' cur]
-            (merge tokens' (:tokens (get-set this cur))))
-          tokens (order-theme-set theme)))
-       (d/ordered-map)
-       active-themes)))
+    (let [theme-set-names  (get-active-themes-set-names this)
+          all-set-names    (get-ordered-set-names this)
+          active-set-names (filter theme-set-names all-set-names)
+          tokens           (reduce (fn [tokens set-name]
+                                     (let [set (get-set this set-name)]
+                                       (merge tokens (:tokens set))))
+                                   (d/ordered-map)
+                                   active-set-names)]
+      tokens))
 
   (encode-dtcg [this]
     (let [themes-xform
@@ -1373,22 +1395,7 @@ Will return a value that matches this schema:
   (decode-legacy-json [this parsed-legacy-json]
     (let [other-data (select-keys parsed-legacy-json ["$themes" "$metadata"])
           sets-data (dissoc parsed-legacy-json "$themes" "$metadata")
-          dtcg-sets-data (walk/postwalk
-                          (fn [node]
-                            (cond-> node
-                              (and (map? node)
-                                   (contains? node "value")
-                                   (sequential? (get node "value")))
-                              (update "value"
-                                      (fn [seq-value]
-                                        (map #(set/rename-keys % {"type" "$type"}) seq-value)))
-
-                              (and (map? node)
-                                   (and (contains? node "type")
-                                        (contains? node "value")))
-                              (set/rename-keys  {"value" "$value"
-                                                 "type" "$type"})))
-                          sets-data)]
+          dtcg-sets-data (legacy-nodes->dtcg-nodes sets-data)]
       (decode-dtcg-json this (merge other-data
                                     dtcg-sets-data))))
   (get-all-tokens [this]
@@ -1463,6 +1470,14 @@ Will return a value that matches this schema:
    :type-properties
    {:encode/json encode-dtcg
     :decode/json decode-dtcg}})
+
+(defn duplicate-set [set-name lib & {:keys [suffix]}]
+  (let [sets (get-sets lib)
+        unames (map :name sets)
+        copy-name (cfh/generate-unique-name set-name unames :suffix suffix)]
+    (some-> (get-set lib set-name)
+            (assoc :name copy-name)
+            (assoc :modified-at (dt/now)))))
 
 (sm/register! type:tokens-lib)
 
